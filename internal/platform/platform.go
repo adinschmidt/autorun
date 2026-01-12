@@ -37,6 +37,12 @@ type ServiceProvider interface {
 
 	// StreamLogs returns a channel that streams log lines for a service
 	StreamLogs(ctx context.Context, name string, scope models.Scope) (<-chan string, error)
+
+	// CreateService creates a new service with the given configuration
+	CreateService(config models.ServiceConfig, scope models.Scope) error
+
+	// DeleteService removes a service
+	DeleteService(name string, scope models.Scope) error
 }
 
 // Detect detects the current platform and returns the appropriate ServiceProvider

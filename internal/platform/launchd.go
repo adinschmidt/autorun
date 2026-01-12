@@ -409,3 +409,189 @@ func (p *LaunchdProvider) StreamLogs(ctx context.Context, name string, scope mod
 
 	return ch, nil
 }
+
+// CreateService creates a new launchd service with the given configuration
+func (p *LaunchdProvider) CreateService(config models.ServiceConfig, scope models.Scope) error {
+	if config.Name == "" {
+		return fmt.Errorf("service name is required")
+	}
+	if config.Program == "" {
+		return fmt.Errorf("program path is required")
+	}
+
+	// Determine the target directory
+	var targetDir string
+	switch scope {
+	case models.ScopeUser:
+		targetDir = filepath.Join(p.userHome, "Library", "LaunchAgents")
+	case models.ScopeSystem:
+		targetDir = "/Library/LaunchDaemons"
+	default:
+		return fmt.Errorf("invalid scope: %s", scope)
+	}
+
+	// Ensure target directory exists
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory %s: %w", targetDir, err)
+	}
+
+	// Check if service already exists
+	plistPath := filepath.Join(targetDir, config.Name+".plist")
+	if _, err := os.Stat(plistPath); err == nil {
+		return fmt.Errorf("service %s already exists", config.Name)
+	}
+
+	// Generate the plist content
+	plist := p.generatePlist(config)
+
+	// Write the plist file
+	if err := os.WriteFile(plistPath, []byte(plist), 0644); err != nil {
+		return fmt.Errorf("failed to write plist file: %w", err)
+	}
+
+	// Load the service if RunAtLoad is set
+	if config.RunAtLoad {
+		return p.Start(config.Name, scope)
+	}
+
+	return nil
+}
+
+// generatePlist creates the XML plist content for a service configuration
+func (p *LaunchdProvider) generatePlist(config models.ServiceConfig) string {
+	var sb strings.Builder
+
+	sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>`)
+	sb.WriteString(escapeXML(config.Name))
+	sb.WriteString(`</string>
+`)
+
+	// Program and arguments
+	if len(config.Arguments) > 0 {
+		sb.WriteString(`	<key>ProgramArguments</key>
+	<array>
+		<string>`)
+		sb.WriteString(escapeXML(config.Program))
+		sb.WriteString(`</string>
+`)
+		for _, arg := range config.Arguments {
+			sb.WriteString(`		<string>`)
+			sb.WriteString(escapeXML(arg))
+			sb.WriteString(`</string>
+`)
+		}
+		sb.WriteString(`	</array>
+`)
+	} else {
+		sb.WriteString(`	<key>Program</key>
+	<string>`)
+		sb.WriteString(escapeXML(config.Program))
+		sb.WriteString(`</string>
+`)
+	}
+
+	// Working directory
+	if config.WorkingDirectory != "" {
+		sb.WriteString(`	<key>WorkingDirectory</key>
+	<string>`)
+		sb.WriteString(escapeXML(config.WorkingDirectory))
+		sb.WriteString(`</string>
+`)
+	}
+
+	// Environment variables
+	if len(config.Environment) > 0 {
+		sb.WriteString(`	<key>EnvironmentVariables</key>
+	<dict>
+`)
+		for key, value := range config.Environment {
+			sb.WriteString(`		<key>`)
+			sb.WriteString(escapeXML(key))
+			sb.WriteString(`</key>
+		<string>`)
+			sb.WriteString(escapeXML(value))
+			sb.WriteString(`</string>
+`)
+		}
+		sb.WriteString(`	</dict>
+`)
+	}
+
+	// RunAtLoad
+	sb.WriteString(`	<key>RunAtLoad</key>
+	<`)
+	if config.RunAtLoad {
+		sb.WriteString("true")
+	} else {
+		sb.WriteString("false")
+	}
+	sb.WriteString(`/>
+`)
+
+	// KeepAlive
+	if config.KeepAlive {
+		sb.WriteString(`	<key>KeepAlive</key>
+	<true/>
+`)
+	}
+
+	// Standard output path
+	if config.StandardOutPath != "" {
+		sb.WriteString(`	<key>StandardOutPath</key>
+	<string>`)
+		sb.WriteString(escapeXML(config.StandardOutPath))
+		sb.WriteString(`</string>
+`)
+	}
+
+	// Standard error path
+	if config.StandardErrorPath != "" {
+		sb.WriteString(`	<key>StandardErrorPath</key>
+	<string>`)
+		sb.WriteString(escapeXML(config.StandardErrorPath))
+		sb.WriteString(`</string>
+`)
+	}
+
+	sb.WriteString(`</dict>
+</plist>
+`)
+
+	return sb.String()
+}
+
+// escapeXML escapes special characters for XML
+func escapeXML(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, "'", "&apos;")
+	s = strings.ReplaceAll(s, "\"", "&quot;")
+	return s
+}
+
+// DeleteService removes a launchd service
+func (p *LaunchdProvider) DeleteService(name string, scope models.Scope) error {
+	plistPath := p.findPlistForLabel(name, scope)
+	if plistPath == "" {
+		return fmt.Errorf("service not found: %s", name)
+	}
+
+	// Stop the service first (ignore errors if not running)
+	_ = p.Stop(name, scope)
+
+	// Disable the service
+	_ = p.Disable(name, scope)
+
+	// Delete the plist file
+	if err := os.Remove(plistPath); err != nil {
+		return fmt.Errorf("failed to delete service file: %w", err)
+	}
+
+	return nil
+}
