@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>autorun</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app">
+        <aside class="sidebar">
+            <header class="sidebar-header">
+                <div class="logo">
+                    <span class="logo-icon">▶</span>
+                    <span class="logo-text">autorun</span>
+                </div>
+                <div class="platform-badge" id="platform-badge">detecting...</div>
+            </header>
+
+            <div class="scope-toggle">
+                <button class="scope-btn active" data-scope="all">ALL</button>
+                <button class="scope-btn" data-scope="system">SYSTEM</button>
+                <button class="scope-btn" data-scope="user">USER</button>
+            </div>
+
+            <div class="search-container">
+                <input type="text" class="search-input" id="search-input" placeholder="FILTER SERVICES...">
+                <div class="search-line"></div>
+            </div>
+
+            <div class="service-list" id="service-list">
+                <div class="loading-state">
+                    <div class="spinner"></div>
+                    <span>SCANNING SERVICES...</span>
+                </div>
+            </div>
+
+            <footer class="sidebar-footer">
+                <div class="service-count">
+                    <span id="service-count">0</span> SERVICES
+                </div>
+            </footer>
+        </aside>
+
+        <main class="main-panel">
+            <div class="empty-state" id="empty-state">
+                <div class="empty-icon">◉</div>
+                <div class="empty-text">SELECT A SERVICE</div>
+                <div class="empty-subtext">Choose from the list to view details and logs</div>
+            </div>
+
+            <div class="service-detail" id="service-detail" style="display: none;">
+                <header class="detail-header">
+                    <div class="detail-title-row">
+                        <div class="status-indicator" id="detail-status"></div>
+                        <h1 class="detail-name" id="detail-name">service-name</h1>
+                        <span class="detail-scope" id="detail-scope">USER</span>
+                    </div>
+                    <p class="detail-description" id="detail-description"></p>
+                </header>
+
+                <div class="control-panel">
+                    <div class="control-group">
+                        <span class="control-label">RUNTIME</span>
+                        <div class="control-buttons">
+                            <button class="ctrl-btn start" data-action="start" title="Start">
+                                <span class="btn-icon">▶</span>
+                                <span class="btn-text">START</span>
+                            </button>
+                            <button class="ctrl-btn stop" data-action="stop" title="Stop">
+                                <span class="btn-icon">■</span>
+                                <span class="btn-text">STOP</span>
+                            </button>
+                            <button class="ctrl-btn restart" data-action="restart" title="Restart">
+                                <span class="btn-icon">↻</span>
+                                <span class="btn-text">RESTART</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="control-divider"></div>
+                    <div class="control-group">
+                        <span class="control-label">BOOT</span>
+                        <div class="control-buttons">
+                            <button class="ctrl-btn enable" data-action="enable" title="Enable">
+                                <span class="btn-icon">◉</span>
+                                <span class="btn-text">ENABLE</span>
+                            </button>
+                            <button class="ctrl-btn disable" data-action="disable" title="Disable">
+                                <span class="btn-icon">○</span>
+                                <span class="btn-text">DISABLE</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="log-panel">
+                    <header class="log-header">
+                        <div class="log-title">
+                            <span class="log-icon">▣</span>
+                            LIVE LOG STREAM
+                        </div>
+                        <div class="log-status" id="log-status">
+                            <span class="log-dot"></span>
+                            DISCONNECTED
+                        </div>
+                    </header>
+                    <div class="log-viewer" id="log-viewer">
+                        <div class="log-content" id="log-content">
+                            <div class="log-placeholder">Connecting to log stream...</div>
+                        </div>
+                        <div class="scanlines"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>
