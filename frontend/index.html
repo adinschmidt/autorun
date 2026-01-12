@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>autorun</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>▶</text></svg>">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -29,6 +30,13 @@
             <div class="search-container">
                 <input type="text" class="search-input" id="search-input" placeholder="FILTER SERVICES...">
                 <div class="search-line"></div>
+            </div>
+
+            <div class="create-container">
+                <button class="create-btn" id="create-btn">
+                    <span class="btn-icon">+</span>
+                    <span class="btn-text">CREATE SERVICE</span>
+                </button>
             </div>
 
             <div class="service-list" id="service-list">
@@ -94,6 +102,16 @@
                             </button>
                         </div>
                     </div>
+                    <div class="control-divider"></div>
+                    <div class="control-group">
+                        <span class="control-label">MANAGE</span>
+                        <div class="control-buttons">
+                            <button class="ctrl-btn delete" id="delete-btn" title="Delete Service">
+                                <span class="btn-icon">✕</span>
+                                <span class="btn-text">DELETE</span>
+                            </button>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="log-panel">
@@ -119,6 +137,78 @@
     </div>
 
     <div class="toast-container" id="toast-container"></div>
+
+    <!-- Create Service Modal -->
+    <div class="modal-overlay" id="create-modal" style="display: none;">
+        <div class="modal">
+            <header class="modal-header">
+                <h2>CREATE SERVICE</h2>
+                <button class="modal-close" id="create-modal-close">✕</button>
+            </header>
+            <form id="create-form" class="modal-form">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>SERVICE NAME *</label>
+                        <input type="text" id="create-name" required placeholder="com.example.myservice">
+                    </div>
+                    <div class="form-group">
+                        <label>SCOPE</label>
+                        <select id="create-scope">
+                            <option value="user">USER</option>
+                            <option value="system">SYSTEM</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>PROGRAM PATH *</label>
+                    <input type="text" id="create-program" required placeholder="/usr/bin/myprogram">
+                </div>
+                <div class="form-group">
+                    <label>ARGUMENTS</label>
+                    <input type="text" id="create-arguments" placeholder="--flag value (space-separated)">
+                </div>
+                <div class="form-group">
+                    <label>DESCRIPTION</label>
+                    <input type="text" id="create-description" placeholder="My service description">
+                </div>
+                <div class="form-group">
+                    <label>WORKING DIRECTORY</label>
+                    <input type="text" id="create-workdir" placeholder="/path/to/workdir">
+                </div>
+                <div class="form-row">
+                    <div class="form-group checkbox-group">
+                        <input type="checkbox" id="create-runatload" checked>
+                        <label for="create-runatload">Run at load</label>
+                    </div>
+                    <div class="form-group checkbox-group">
+                        <input type="checkbox" id="create-keepalive">
+                        <label for="create-keepalive">Keep alive (auto-restart)</label>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="modal-btn cancel" id="create-cancel">CANCEL</button>
+                    <button type="submit" class="modal-btn submit">CREATE</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div class="modal-overlay" id="delete-modal" style="display: none;">
+        <div class="modal modal-small">
+            <header class="modal-header">
+                <h2>DELETE SERVICE</h2>
+            </header>
+            <div class="modal-body">
+                <p>Are you sure you want to delete <strong id="delete-service-name"></strong>?</p>
+                <p class="warning-text">This action cannot be undone.</p>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="modal-btn cancel" id="delete-cancel">CANCEL</button>
+                <button type="button" class="modal-btn delete" id="delete-confirm">DELETE</button>
+            </div>
+        </div>
+    </div>
 
     <script src="app.js"></script>
 </body>

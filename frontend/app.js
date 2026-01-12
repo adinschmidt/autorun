@@ -9,7 +9,8 @@ const state = {
     currentScope: 'all',
     searchQuery: '',
     logSocket: null,
-    platform: null
+    platform: null,
+    elevated: false
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -31,7 +32,19 @@ const elements = {
     logContent: document.getElementById('log-content'),
     logStatus: document.getElementById('log-status'),
     controlButtons: document.querySelectorAll('.ctrl-btn'),
-    toastContainer: document.getElementById('toast-container')
+    toastContainer: document.getElementById('toast-container'),
+    // Create service elements
+    createBtn: document.getElementById('create-btn'),
+    createModal: document.getElementById('create-modal'),
+    createModalClose: document.getElementById('create-modal-close'),
+    createForm: document.getElementById('create-form'),
+    createCancel: document.getElementById('create-cancel'),
+    // Delete service elements
+    deleteBtn: document.getElementById('delete-btn'),
+    deleteModal: document.getElementById('delete-modal'),
+    deleteServiceName: document.getElementById('delete-service-name'),
+    deleteCancel: document.getElementById('delete-cancel'),
+    deleteConfirm: document.getElementById('delete-confirm')
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -59,12 +72,28 @@ async function fetchPlatform() {
     try {
         const data = await api('GET', '/api/platform');
         state.platform = data.platform;
+        state.elevated = data.elevated;
         elements.platformBadge.textContent = data.platform.toUpperCase();
         elements.platformBadge.classList.add('detected');
+
+        // Show elevation warning if not running as root
+        if (!data.elevated) {
+            showElevationWarning();
+        }
     } catch (err) {
         console.error('Failed to fetch platform:', err);
         elements.platformBadge.textContent = 'ERROR';
     }
+}
+
+function showElevationWarning() {
+    const warning = document.createElement('div');
+    warning.className = 'elevation-warning';
+    warning.innerHTML = `
+        <span class="warning-icon">!</span>
+        <span class="warning-text">Limited mode - run with sudo to modify system services</span>
+    `;
+    document.querySelector('.sidebar-header').appendChild(warning);
 }
 
 async function fetchServices() {
@@ -74,7 +103,7 @@ async function fetchServices() {
         filterAndRenderServices();
     } catch (err) {
         console.error('Failed to fetch services:', err);
-        showToast('Failed to load services', 'error');
+        showToast('Failed to load services. Is the server running and accessible?', 'error');
         elements.serviceList.innerHTML = `
             <div class="loading-state">
                 <span style="color: var(--status-stopped);">ERROR LOADING SERVICES</span>
@@ -93,19 +122,167 @@ async function performAction(action) {
         await api('POST', `/api/services/${encodeURIComponent(name)}/${action}?scope=${scope}`);
         showToast(`${name}: ${action} successful`, 'success');
 
+        // Wait briefly for launchd/systemd to update status before refreshing
+        await new Promise(resolve => setTimeout(resolve, 500));
+
         // Refresh services after action
         await fetchServices();
 
         // Update selected service with new data
         const updated = state.services.find(s => s.name === name && s.scope === scope);
         if (updated) {
-            selectService(updated);
+            // Update UI without reconnecting log stream
+            state.selectedService = updated;
+            elements.detailStatus.className = `status-indicator ${updated.status}`;
+            updateControlButtons(updated);
+
+            // Update the list item status
+            const listItem = elements.serviceList.querySelector(
+                `.service-item[data-name="${CSS.escape(name)}"][data-scope="${scope}"]`
+            );
+            if (listItem) {
+                const statusDot = listItem.querySelector('.service-status');
+                if (statusDot) {
+                    statusDot.className = `service-status ${updated.status}`;
+                }
+            }
         }
     } catch (err) {
         console.error(`Action ${action} failed:`, err);
         showToast(`${action} failed: ${err.message}`, 'error');
     } finally {
         setControlsLoading(false);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Create Service
+// ═══════════════════════════════════════════════════════════
+
+function openCreateModal() {
+    elements.createModal.style.display = 'flex';
+    document.getElementById('create-name').value = '';
+    document.getElementById('create-program').value = '';
+    document.getElementById('create-arguments').value = '';
+    document.getElementById('create-description').value = '';
+    document.getElementById('create-workdir').value = '';
+    document.getElementById('create-runatload').checked = true;
+    document.getElementById('create-keepalive').checked = false;
+    document.getElementById('create-scope').value = 'user';
+    document.getElementById('create-name').focus();
+}
+
+function closeCreateModal() {
+    elements.createModal.style.display = 'none';
+}
+
+async function handleCreateService(e) {
+    e.preventDefault();
+
+    const name = document.getElementById('create-name').value.trim();
+    const program = document.getElementById('create-program').value.trim();
+    const argumentsStr = document.getElementById('create-arguments').value.trim();
+    const description = document.getElementById('create-description').value.trim();
+    const workingDirectory = document.getElementById('create-workdir').value.trim();
+    const runAtLoad = document.getElementById('create-runatload').checked;
+    const keepAlive = document.getElementById('create-keepalive').checked;
+    const scope = document.getElementById('create-scope').value;
+
+    // Parse arguments (space-separated, respecting quotes)
+    const args = argumentsStr ? parseArguments(argumentsStr) : [];
+
+    const config = {
+        name,
+        program,
+        arguments: args,
+        description,
+        workingDirectory,
+        runAtLoad,
+        keepAlive
+    };
+
+    try {
+        await api('POST', `/api/services?scope=${scope}`, config);
+        showToast(`Service ${name} created successfully`, 'success');
+        closeCreateModal();
+        await fetchServices();
+
+        // Select the newly created service
+        const newService = state.services.find(s => s.name === name && s.scope === scope);
+        if (newService) {
+            selectService(newService);
+        }
+    } catch (err) {
+        console.error('Failed to create service:', err);
+        showToast(`Failed to create service: ${err.message}`, 'error');
+    }
+}
+
+function parseArguments(str) {
+    const args = [];
+    let current = '';
+    let inQuote = false;
+    let quoteChar = '';
+
+    for (const char of str) {
+        if ((char === '"' || char === "'") && !inQuote) {
+            inQuote = true;
+            quoteChar = char;
+        } else if (char === quoteChar && inQuote) {
+            inQuote = false;
+            quoteChar = '';
+        } else if (char === ' ' && !inQuote) {
+            if (current) {
+                args.push(current);
+                current = '';
+            }
+        } else {
+            current += char;
+        }
+    }
+    if (current) args.push(current);
+    return args;
+}
+
+// ═══════════════════════════════════════════════════════════
+// Delete Service
+// ═══════════════════════════════════════════════════════════
+
+function openDeleteModal() {
+    if (!state.selectedService) return;
+    elements.deleteServiceName.textContent = state.selectedService.name;
+    elements.deleteModal.style.display = 'flex';
+}
+
+function closeDeleteModal() {
+    elements.deleteModal.style.display = 'none';
+}
+
+async function handleDeleteService() {
+    if (!state.selectedService) return;
+
+    const { name, scope } = state.selectedService;
+
+    try {
+        await api('DELETE', `/api/services/${encodeURIComponent(name)}?scope=${scope}`);
+        showToast(`Service ${name} deleted successfully`, 'success');
+        closeDeleteModal();
+
+        // Clear selection and refresh
+        state.selectedService = null;
+        elements.serviceDetail.style.display = 'none';
+        elements.emptyState.style.display = 'flex';
+
+        // Close log stream
+        if (state.logSocket) {
+            state.logSocket.close();
+            state.logSocket = null;
+        }
+
+        await fetchServices();
+    } catch (err) {
+        console.error('Failed to delete service:', err);
+        showToast(`Failed to delete service: ${err.message}`, 'error');
     }
 }
 
@@ -331,13 +508,32 @@ function setupEventListeners() {
         filterAndRenderServices();
     });
 
-    // Control buttons
+    // Control buttons (skip delete button - it has its own handler)
     elements.controlButtons.forEach(btn => {
-        btn.addEventListener('click', () => {
-            if (!btn.disabled) {
-                performAction(btn.dataset.action);
-            }
-        });
+        if (btn.dataset.action) {
+            btn.addEventListener('click', () => {
+                if (!btn.disabled) {
+                    performAction(btn.dataset.action);
+                }
+            });
+        }
+    });
+
+    // Create service
+    elements.createBtn.addEventListener('click', openCreateModal);
+    elements.createModalClose.addEventListener('click', closeCreateModal);
+    elements.createCancel.addEventListener('click', closeCreateModal);
+    elements.createForm.addEventListener('submit', handleCreateService);
+    elements.createModal.addEventListener('click', (e) => {
+        if (e.target === elements.createModal) closeCreateModal();
+    });
+
+    // Delete service
+    elements.deleteBtn.addEventListener('click', openDeleteModal);
+    elements.deleteCancel.addEventListener('click', closeDeleteModal);
+    elements.deleteConfirm.addEventListener('click', handleDeleteService);
+    elements.deleteModal.addEventListener('click', (e) => {
+        if (e.target === elements.deleteModal) closeDeleteModal();
     });
 
     // Keyboard shortcuts
@@ -348,12 +544,18 @@ function setupEventListeners() {
             elements.searchInput.focus();
         }
 
-        // Escape to clear search
+        // Escape to close modals or clear search
         if (e.key === 'Escape') {
-            elements.searchInput.value = '';
-            state.searchQuery = '';
-            filterAndRenderServices();
-            elements.searchInput.blur();
+            if (elements.createModal.style.display !== 'none') {
+                closeCreateModal();
+            } else if (elements.deleteModal.style.display !== 'none') {
+                closeDeleteModal();
+            } else {
+                elements.searchInput.value = '';
+                state.searchQuery = '';
+                filterAndRenderServices();
+                elements.searchInput.blur();
+            }
         }
     });
 }

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 
 	"autorun/internal/models"
@@ -44,10 +45,11 @@ func parseScope(r *http.Request) models.Scope {
 	}
 }
 
-// GetPlatform returns the current platform name
+// GetPlatform returns the current platform name and elevation status
 func (h *Handler) GetPlatform(w http.ResponseWriter, r *http.Request) {
-	jsonResponse(w, http.StatusOK, map[string]string{
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
 		"platform": h.provider.Name(),
+		"elevated": os.Geteuid() == 0,
 	})
 }
 
@@ -144,6 +146,47 @@ func (h *Handler) DisableService(w http.ResponseWriter, r *http.Request, name st
 		return
 	}
 	jsonResponse(w, http.StatusOK, map[string]string{"status": "disabled"})
+}
+
+// CreateService creates a new service
+func (h *Handler) CreateService(w http.ResponseWriter, r *http.Request) {
+	scope := parseScope(r)
+
+	var config models.ServiceConfig
+	if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
+		errorResponse(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+
+	// Validate required fields
+	if config.Name == "" {
+		errorResponse(w, http.StatusBadRequest, "Service name is required")
+		return
+	}
+	if config.Program == "" {
+		errorResponse(w, http.StatusBadRequest, "Program path is required")
+		return
+	}
+
+	if err := h.provider.CreateService(config, scope); err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusCreated, map[string]string{
+		"status": "created",
+		"name":   config.Name,
+	})
+}
+
+// DeleteService deletes a service
+func (h *Handler) DeleteService(w http.ResponseWriter, r *http.Request, name string) {
+	scope := parseScope(r)
+	if err := h.provider.DeleteService(name, scope); err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 // extractServiceName extracts the service name from the URL path

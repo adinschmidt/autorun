@@ -42,13 +42,16 @@ func (r *Router) setupRoutes() {
 	}
 }
 
-// handleServices handles GET /api/services
+// handleServices handles GET /api/services and POST /api/services (create)
 func (r *Router) handleServices(w http.ResponseWriter, req *http.Request) {
-	if req.Method != http.MethodGet {
+	switch req.Method {
+	case http.MethodGet:
+		r.handler.ListServices(w, req)
+	case http.MethodPost:
+		r.handler.CreateService(w, req)
+	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
 	}
-	r.handler.ListServices(w, req)
 }
 
 // handleServiceAction routes service-specific actions
@@ -70,12 +73,15 @@ func (r *Router) handleServiceAction(w http.ResponseWriter, req *http.Request) {
 
 	switch action {
 	case "":
-		// GET /api/services/{name}
-		if req.Method != http.MethodGet {
+		// GET /api/services/{name} or DELETE /api/services/{name}
+		switch req.Method {
+		case http.MethodGet:
+			r.handler.GetService(w, req, serviceName)
+		case http.MethodDelete:
+			r.handler.DeleteService(w, req, serviceName)
+		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
 		}
-		r.handler.GetService(w, req, serviceName)
 
 	case "start":
 		if req.Method != http.MethodPost {

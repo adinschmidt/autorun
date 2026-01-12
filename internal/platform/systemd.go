@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"os/user"
+	"path/filepath"
 	"strings"
 
 	"autorun/internal/models"
@@ -199,4 +202,200 @@ func (p *SystemdProvider) StreamLogs(ctx context.Context, name string, scope mod
 	}()
 
 	return ch, nil
+}
+
+// CreateService creates a new systemd service with the given configuration
+func (p *SystemdProvider) CreateService(config models.ServiceConfig, scope models.Scope) error {
+	if config.Name == "" {
+		return fmt.Errorf("service name is required")
+	}
+	if config.Program == "" {
+		return fmt.Errorf("program path is required")
+	}
+
+	// Determine the target directory
+	var targetDir string
+	switch scope {
+	case models.ScopeUser:
+		u, err := user.Current()
+		if err != nil {
+			return fmt.Errorf("failed to get current user: %w", err)
+		}
+		targetDir = filepath.Join(u.HomeDir, ".config", "systemd", "user")
+	case models.ScopeSystem:
+		targetDir = "/etc/systemd/system"
+	default:
+		return fmt.Errorf("invalid scope: %s", scope)
+	}
+
+	// Ensure target directory exists
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory %s: %w", targetDir, err)
+	}
+
+	// Service name for file
+	serviceName := config.Name
+	if !strings.HasSuffix(serviceName, ".service") {
+		serviceName = serviceName + ".service"
+	}
+
+	// Check if service already exists
+	unitPath := filepath.Join(targetDir, serviceName)
+	if _, err := os.Stat(unitPath); err == nil {
+		return fmt.Errorf("service %s already exists", config.Name)
+	}
+
+	// Generate the unit file content
+	unitContent := p.generateUnitFile(config)
+
+	// Write the unit file
+	if err := os.WriteFile(unitPath, []byte(unitContent), 0644); err != nil {
+		return fmt.Errorf("failed to write unit file: %w", err)
+	}
+
+	// Reload systemd to pick up the new unit
+	if err := p.daemonReload(scope); err != nil {
+		// Try to clean up the file we just created
+		os.Remove(unitPath)
+		return fmt.Errorf("failed to reload systemd: %w", err)
+	}
+
+	// Enable and start the service if RunAtLoad is set
+	if config.RunAtLoad {
+		if err := p.Enable(config.Name, scope); err != nil {
+			return fmt.Errorf("failed to enable service: %w", err)
+		}
+		if err := p.Start(config.Name, scope); err != nil {
+			return fmt.Errorf("failed to start service: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// generateUnitFile creates the systemd unit file content for a service configuration
+func (p *SystemdProvider) generateUnitFile(config models.ServiceConfig) string {
+	var sb strings.Builder
+
+	// [Unit] section
+	sb.WriteString("[Unit]\n")
+	if config.Description != "" {
+		sb.WriteString(fmt.Sprintf("Description=%s\n", config.Description))
+	} else {
+		sb.WriteString(fmt.Sprintf("Description=%s service\n", config.Name))
+	}
+	sb.WriteString("After=network.target\n")
+	sb.WriteString("\n")
+
+	// [Service] section
+	sb.WriteString("[Service]\n")
+	sb.WriteString("Type=simple\n")
+
+	// ExecStart with program and arguments
+	execStart := config.Program
+	if len(config.Arguments) > 0 {
+		for _, arg := range config.Arguments {
+			// Escape spaces in arguments
+			if strings.Contains(arg, " ") {
+				execStart += fmt.Sprintf(" \"%s\"", arg)
+			} else {
+				execStart += " " + arg
+			}
+		}
+	}
+	sb.WriteString(fmt.Sprintf("ExecStart=%s\n", execStart))
+
+	// Working directory
+	if config.WorkingDirectory != "" {
+		sb.WriteString(fmt.Sprintf("WorkingDirectory=%s\n", config.WorkingDirectory))
+	}
+
+	// Environment variables
+	for key, value := range config.Environment {
+		sb.WriteString(fmt.Sprintf("Environment=\"%s=%s\"\n", key, value))
+	}
+
+	// Restart policy
+	if config.KeepAlive {
+		sb.WriteString("Restart=always\n")
+		sb.WriteString("RestartSec=5\n")
+	}
+
+	// Standard output/error
+	if config.StandardOutPath != "" {
+		sb.WriteString(fmt.Sprintf("StandardOutput=file:%s\n", config.StandardOutPath))
+	}
+	if config.StandardErrorPath != "" {
+		sb.WriteString(fmt.Sprintf("StandardError=file:%s\n", config.StandardErrorPath))
+	}
+
+	sb.WriteString("\n")
+
+	// [Install] section
+	sb.WriteString("[Install]\n")
+	sb.WriteString("WantedBy=default.target\n")
+
+	return sb.String()
+}
+
+// daemonReload runs systemctl daemon-reload
+func (p *SystemdProvider) daemonReload(scope models.Scope) error {
+	var args []string
+	if scope == models.ScopeUser {
+		args = append(args, "--user")
+	}
+	args = append(args, "daemon-reload")
+
+	cmd := exec.Command("systemctl", args...)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("daemon-reload failed: %s", string(output))
+	}
+	return nil
+}
+
+// DeleteService removes a systemd service
+func (p *SystemdProvider) DeleteService(name string, scope models.Scope) error {
+	// Determine the target directory
+	var targetDir string
+	switch scope {
+	case models.ScopeUser:
+		u, err := user.Current()
+		if err != nil {
+			return fmt.Errorf("failed to get current user: %w", err)
+		}
+		targetDir = filepath.Join(u.HomeDir, ".config", "systemd", "user")
+	case models.ScopeSystem:
+		targetDir = "/etc/systemd/system"
+	default:
+		return fmt.Errorf("invalid scope: %s", scope)
+	}
+
+	// Service name for file
+	serviceName := name
+	if !strings.HasSuffix(serviceName, ".service") {
+		serviceName = serviceName + ".service"
+	}
+
+	unitPath := filepath.Join(targetDir, serviceName)
+	if _, err := os.Stat(unitPath); os.IsNotExist(err) {
+		return fmt.Errorf("service not found: %s", name)
+	}
+
+	// Stop the service first (ignore errors if not running)
+	_ = p.Stop(name, scope)
+
+	// Disable the service
+	_ = p.Disable(name, scope)
+
+	// Delete the unit file
+	if err := os.Remove(unitPath); err != nil {
+		return fmt.Errorf("failed to delete service file: %w", err)
+	}
+
+	// Reload systemd
+	if err := p.daemonReload(scope); err != nil {
+		return fmt.Errorf("failed to reload systemd: %w", err)
+	}
+
+	return nil
 }
