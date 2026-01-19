@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,10 +16,34 @@ import (
 	"autorun/internal/platform"
 )
 
+// findAvailablePort finds the first available port starting from startPort.
+// It tries up to maxAttempts ports before giving up.
+func findAvailablePort(host string, startPort, maxAttempts int) (int, error) {
+	for i := 0; i < maxAttempts; i++ {
+		port := startPort + i
+		addr := fmt.Sprintf("%s:%d", host, port)
+		listener, err := net.Listen("tcp", addr)
+		if err == nil {
+			listener.Close()
+			return port, nil
+		}
+	}
+	return 0, fmt.Errorf("no available port found in range %d-%d", startPort, startPort+maxAttempts-1)
+}
+
 func main() {
-	port := flag.Int("port", 8080, "Port to listen on")
+	port := flag.Int("port", 8080, "Starting port to listen on (will auto-increment if in use)")
 	listen := flag.String("listen", "127.0.0.1", "Address to bind to")
 	flag.Parse()
+
+	// Find an available port starting from the specified port
+	actualPort, err := findAvailablePort(*listen, *port, 100)
+	if err != nil {
+		log.Fatalf("Failed to find available port: %v", err)
+	}
+	if actualPort != *port {
+		log.Printf("Port %d is in use, using port %d instead", *port, actualPort)
+	}
 
 	// Warn about security implications of non-localhost binding
 	if *listen != "127.0.0.1" && *listen != "localhost" {
@@ -58,7 +83,7 @@ func main() {
 	router := api.NewRouter(provider, frontendFS)
 
 	// Start server
-	addr := fmt.Sprintf("%s:%d", *listen, *port)
+	addr := fmt.Sprintf("%s:%d", *listen, actualPort)
 	log.Printf("Starting server at http://%s", addr)
 
 	srv := &http.Server{
