@@ -26,9 +26,29 @@ func NewLaunchdProvider() (*LaunchdProvider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current user: %w", err)
 	}
+
+	uid := u.Uid
+	userHome := u.HomeDir
+
+	// If running as root (e.g., via sudo), get the actual GUI user's UID
+	// by checking the owner of /dev/console
+	if uid == "0" {
+		cmd := exec.Command("stat", "-f", "%u", "/dev/console")
+		if output, err := cmd.Output(); err == nil {
+			consoleUID := strings.TrimSpace(string(output))
+			if consoleUID != "" && consoleUID != "0" {
+				uid = consoleUID
+				// Also get the correct home directory for this user
+				if guiUser, err := user.LookupId(uid); err == nil {
+					userHome = guiUser.HomeDir
+				}
+			}
+		}
+	}
+
 	return &LaunchdProvider{
-		userHome: u.HomeDir,
-		uid:      u.Uid,
+		userHome: userHome,
+		uid:      uid,
 	}, nil
 }
 
@@ -36,22 +56,34 @@ func (p *LaunchdProvider) Name() string {
 	return "launchd"
 }
 
-// launchdEntry represents a parsed line from launchctl list
+// launchdEntry represents a parsed line from a launchctl domain services listing
+// (launchctl print <domain>)
 type launchdEntry struct {
-	pid    int    // -1 if not running
-	status int    // exit status, 0 if running
-	label  string // service label
+	pid   int    // 0 if not running/unknown
+	label string // service label
 }
 
-// parseLaunchctlList parses the output of launchctl list
-func parseLaunchctlList(output string) []launchdEntry {
+// parseLaunchctlPrintServices parses the "services = { ... }" block of
+// `launchctl print <domain>` output.
+func parseLaunchctlPrintServices(output string) []launchdEntry {
 	var entries []launchdEntry
-	lines := strings.Split(output, "\n")
 
-	for i, line := range lines {
-		// Skip header line
-		if i == 0 || strings.TrimSpace(line) == "" {
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	inServices := false
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+
+		if !inServices {
+			if trimmed == "services = {" {
+				inServices = true
+			}
 			continue
+		}
+
+		if trimmed == "}" {
+			break
 		}
 
 		fields := strings.Fields(line)
@@ -59,28 +91,68 @@ func parseLaunchctlList(output string) []launchdEntry {
 			continue
 		}
 
-		entry := launchdEntry{label: fields[2]}
-
-		// Parse PID
-		if fields[0] == "-" {
-			entry.pid = -1
-		} else {
-			pid, _ := strconv.Atoi(fields[0])
-			entry.pid = pid
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil {
+			continue
 		}
 
-		// Parse status
-		if fields[1] == "-" {
-			entry.status = 0
-		} else {
-			status, _ := strconv.Atoi(fields[1])
-			entry.status = status
-		}
-
-		entries = append(entries, entry)
+		entries = append(entries, launchdEntry{
+			pid:   pid,
+			label: fields[2],
+		})
 	}
 
 	return entries
+}
+
+func (p *LaunchdProvider) listDomainServices(domain string) ([]launchdEntry, error) {
+	cmd := exec.Command("launchctl", "print", domain)
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("launchctl print %s failed: %w", domain, err)
+	}
+
+	return parseLaunchctlPrintServices(string(output)), nil
+}
+
+// listDisabledServices returns a map of label -> disabled for the domain.
+// If the command fails, an empty map is returned.
+func (p *LaunchdProvider) listDisabledServices(domain string) map[string]bool {
+	cmd := exec.Command("launchctl", "print-disabled", domain)
+	output, err := cmd.Output()
+	if err != nil {
+		return map[string]bool{}
+	}
+
+	result := make(map[string]bool)
+	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		// lines look like: "com.apple.foo" => disabled
+		parts := strings.Split(line, "=>")
+		if len(parts) != 2 {
+			continue
+		}
+
+		label := strings.TrimSpace(parts[0])
+		label = strings.Trim(label, "\"")
+
+		state := strings.TrimSpace(parts[1])
+		state = strings.TrimSuffix(state, ",")
+		state = strings.TrimSpace(state)
+
+		if label == "" {
+			continue
+		}
+
+		result[label] = (state == "disabled")
+	}
+
+	return result
 }
 
 // getServiceDirs returns the directories to search for plist files
@@ -114,25 +186,34 @@ func (p *LaunchdProvider) findPlistForLabel(label string, scope models.Scope) st
 }
 
 func (p *LaunchdProvider) ListServices(scope models.Scope) ([]models.Service, error) {
-	var cmd *exec.Cmd
-
+	var domainTarget string
 	switch scope {
 	case models.ScopeUser:
-		cmd = exec.Command("launchctl", "list")
+		domainTarget = fmt.Sprintf("gui/%s", p.uid)
 	case models.ScopeSystem:
-		cmd = exec.Command("launchctl", "list")
+		domainTarget = "system"
 	default:
 		return nil, fmt.Errorf("invalid scope: %s", scope)
 	}
 
-	output, err := cmd.Output()
+	entries, err := p.listDomainServices(domainTarget)
 	if err != nil {
-		return nil, fmt.Errorf("launchctl list failed: %w", err)
+		return nil, err
 	}
 
-	entries := parseLaunchctlList(string(output))
+	// Map of running state by label for this domain.
+	runningByLabel := make(map[string]bool)
+	for _, entry := range entries {
+		if entry.pid > 0 {
+			runningByLabel[entry.label] = true
+		}
+	}
 
-	// Build a set of known labels from plist files in relevant directories
+	// Launchd doesn't have a single query that returns "enabled" for every service
+	// the way systemd does. We approximate enabled/disabled using
+	// `launchctl print-disabled <domain>` and fall back to filesystem presence.
+	disabledByLabel := p.listDisabledServices(domainTarget)
+
 	knownLabels := make(map[string]bool)
 	dirs := p.getServiceDirs(scope)
 	for _, dir := range dirs {
@@ -148,52 +229,26 @@ func (p *LaunchdProvider) ListServices(scope models.Scope) ([]models.Service, er
 		}
 	}
 
-	var services []models.Service
-	for _, entry := range entries {
-		// For user scope, include services that have plist files in user directories
-		// For system scope, include services from system directories
-		// Also filter out Apple system services (com.apple.*) for cleaner output
-		hasPllist := knownLabels[entry.label]
-
-		// Skip services without plist files in our known directories
-		if !hasPllist {
-			continue
+	// Only show services that have plist files in known directories
+	services := make([]models.Service, 0, len(knownLabels))
+	for label := range knownLabels {
+		status := models.StatusStopped
+		if runningByLabel[label] {
+			status = models.StatusRunning
 		}
 
-		status := models.StatusStopped
-		if entry.pid > 0 {
-			status = models.StatusRunning
-		} else if entry.status != 0 {
-			status = models.StatusFailed
+		enabled := knownLabels[label]
+		if disabled, ok := disabledByLabel[label]; ok {
+			enabled = !disabled
 		}
 
 		services = append(services, models.Service{
-			Name:        entry.label,
-			DisplayName: entry.label,
+			Name:        label,
+			DisplayName: label,
 			Status:      status,
-			Enabled:     true, // launchd services are enabled if they're loaded
+			Enabled:     enabled,
 			Scope:       scope,
 		})
-	}
-
-	// Also add services that have plist files but aren't loaded
-	for label := range knownLabels {
-		found := false
-		for _, svc := range services {
-			if svc.Name == label {
-				found = true
-				break
-			}
-		}
-		if !found {
-			services = append(services, models.Service{
-				Name:        label,
-				DisplayName: label,
-				Status:      models.StatusStopped,
-				Enabled:     false,
-				Scope:       scope,
-			})
-		}
 	}
 
 	return services, nil
