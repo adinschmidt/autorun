@@ -16,15 +16,41 @@ import (
 )
 
 // SystemdProvider implements ServiceProvider for Linux systemd
-type SystemdProvider struct{}
+type SystemdProvider struct {
+	// targetUser is set when running as root to access another user's services
+	// via --machine=<user>@.host
+	targetUser string
+}
 
 // NewSystemdProvider creates a new systemd provider
 func NewSystemdProvider() (*SystemdProvider, error) {
-	return &SystemdProvider{}, nil
+	p := &SystemdProvider{}
+
+	// If running as root, we need to use --machine=<user>@.host to access
+	// user services via the user's D-Bus session
+	if os.Geteuid() == 0 {
+		// Try SUDO_USER first (most common case)
+		if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" && sudoUser != "root" {
+			p.targetUser = sudoUser
+			logger.Debug("running as root, will use machine target for user services", "targetUser", sudoUser)
+		}
+	}
+
+	return p, nil
 }
 
 func (p *SystemdProvider) Name() string {
 	return "systemd"
+}
+
+// getUserScopeArgs returns the systemctl arguments needed to access user services.
+// When running as root with a target user, uses --machine=<user>@.host --user.
+// Otherwise, just returns --user.
+func (p *SystemdProvider) getUserScopeArgs() []string {
+	if p.targetUser != "" {
+		return []string{"--machine=" + p.targetUser + "@.host", "--user"}
+	}
+	return []string{"--user"}
 }
 
 // systemdUnit represents a unit from systemctl list-units --output=json
@@ -40,7 +66,7 @@ func (p *SystemdProvider) listUnits(scope models.Scope) ([]systemdUnit, error) {
 	var args []string
 
 	if scope == models.ScopeUser {
-		args = append(args, "--user")
+		args = append(args, p.getUserScopeArgs()...)
 	}
 	args = append(args, "list-units", "--type=service", "--all", "--output=json")
 
@@ -70,7 +96,7 @@ func (p *SystemdProvider) listUnits(scope models.Scope) ([]systemdUnit, error) {
 func (p *SystemdProvider) isEnabled(name string, scope models.Scope) bool {
 	var args []string
 	if scope == models.ScopeUser {
-		args = append(args, "--user")
+		args = append(args, p.getUserScopeArgs()...)
 	}
 	args = append(args, "is-enabled", name)
 
@@ -138,7 +164,7 @@ func (p *SystemdProvider) GetService(name string, scope models.Scope) (*models.S
 func (p *SystemdProvider) runSystemctl(action, name string, scope models.Scope) error {
 	var args []string
 	if scope == models.ScopeUser {
-		args = append(args, "--user")
+		args = append(args, p.getUserScopeArgs()...)
 	}
 
 	// Ensure .service suffix
@@ -184,7 +210,12 @@ func (p *SystemdProvider) StreamLogs(ctx context.Context, name string, scope mod
 	args = append(args, "-f", "-n", "100") // Follow, last 100 lines
 
 	if scope == models.ScopeUser {
-		args = append(args, "--user-unit", name+".service")
+		// When running as root with a target user, use --machine to access their journal
+		if p.targetUser != "" {
+			args = append(args, "--machine="+p.targetUser+"@.host", "--user-unit", name+".service")
+		} else {
+			args = append(args, "--user-unit", name+".service")
+		}
 	} else {
 		args = append(args, "-u", name+".service")
 	}
@@ -376,7 +407,7 @@ func (p *SystemdProvider) generateUnitFile(config models.ServiceConfig) string {
 func (p *SystemdProvider) daemonReload(scope models.Scope) error {
 	var args []string
 	if scope == models.ScopeUser {
-		args = append(args, "--user")
+		args = append(args, p.getUserScopeArgs()...)
 	}
 	args = append(args, "daemon-reload")
 
