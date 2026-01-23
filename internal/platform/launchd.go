@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"autorun/internal/logger"
 	"autorun/internal/models"
 )
 
@@ -24,23 +25,28 @@ type LaunchdProvider struct {
 func NewLaunchdProvider() (*LaunchdProvider, error) {
 	u, err := user.Current()
 	if err != nil {
+		logger.Error("failed to get current user", "error", err)
 		return nil, fmt.Errorf("failed to get current user: %w", err)
 	}
 
 	uid := u.Uid
 	userHome := u.HomeDir
+	logger.Debug("launchd provider user info", "uid", uid, "home", userHome)
 
 	// If running as root (e.g., via sudo), get the actual GUI user's UID
 	// by checking the owner of /dev/console
 	if uid == "0" {
+		logger.Debug("running as root, detecting console user")
 		cmd := exec.Command("stat", "-f", "%u", "/dev/console")
 		if output, err := cmd.Output(); err == nil {
 			consoleUID := strings.TrimSpace(string(output))
 			if consoleUID != "" && consoleUID != "0" {
 				uid = consoleUID
+				logger.Debug("detected console user", "uid", uid)
 				// Also get the correct home directory for this user
 				if guiUser, err := user.LookupId(uid); err == nil {
 					userHome = guiUser.HomeDir
+					logger.Debug("resolved user home", "home", userHome)
 				}
 			}
 		}
@@ -106,13 +112,17 @@ func parseLaunchctlPrintServices(output string) []launchdEntry {
 }
 
 func (p *LaunchdProvider) listDomainServices(domain string) ([]launchdEntry, error) {
+	logger.Debug("listing domain services", "domain", domain)
 	cmd := exec.Command("launchctl", "print", domain)
 	output, err := cmd.Output()
 	if err != nil {
+		logger.Error("launchctl print failed", "domain", domain, "error", err)
 		return nil, fmt.Errorf("launchctl print %s failed: %w", domain, err)
 	}
 
-	return parseLaunchctlPrintServices(string(output)), nil
+	entries := parseLaunchctlPrintServices(string(output))
+	logger.Debug("parsed domain services", "domain", domain, "count", len(entries))
+	return entries, nil
 }
 
 // listDisabledServices returns a map of label -> disabled for the domain.
@@ -270,8 +280,11 @@ func (p *LaunchdProvider) GetService(name string, scope models.Scope) (*models.S
 }
 
 func (p *LaunchdProvider) Start(name string, scope models.Scope) error {
+	logger.Debug("starting service", "name", name, "scope", scope)
+
 	plistPath := p.findPlistForLabel(name, scope)
 	if plistPath == "" {
+		logger.Error("plist not found", "name", name, "scope", scope)
 		return fmt.Errorf("plist not found for service: %s", name)
 	}
 
@@ -285,17 +298,25 @@ func (p *LaunchdProvider) Start(name string, scope models.Scope) error {
 
 	// Try modern bootstrap first (macOS 10.10+)
 	// bootstrap loads the service into the domain
+	logger.Debug("attempting bootstrap", "domain", domainTarget, "plist", plistPath)
 	cmd := exec.Command("launchctl", "bootstrap", domainTarget, plistPath)
 	bootstrapErr := cmd.Run()
+	if bootstrapErr != nil {
+		logger.Debug("bootstrap failed (may already be loaded)", "error", bootstrapErr)
+	}
 
 	// If bootstrap succeeded or service already loaded, try to kickstart it
 	// kickstart -k will kill any existing instance and restart
+	logger.Debug("attempting kickstart", "target", serviceTarget)
 	cmd = exec.Command("launchctl", "kickstart", "-k", serviceTarget)
 	if err := cmd.Run(); err != nil {
+		logger.Debug("kickstart failed", "error", err)
 		// If kickstart fails and bootstrap also failed, try legacy load
 		if bootstrapErr != nil {
+			logger.Debug("attempting legacy load", "plist", plistPath)
 			cmd = exec.Command("launchctl", "load", plistPath)
 			if err := cmd.Run(); err != nil {
+				logger.Error("all start methods failed", "name", name, "error", err)
 				return fmt.Errorf("failed to start service: %w", err)
 			}
 			// After legacy load, try kickstart again
@@ -304,10 +325,13 @@ func (p *LaunchdProvider) Start(name string, scope models.Scope) error {
 		}
 	}
 
+	logger.Debug("service started", "name", name)
 	return nil
 }
 
 func (p *LaunchdProvider) Stop(name string, scope models.Scope) error {
+	logger.Debug("stopping service", "name", name, "scope", scope)
+
 	var domainTarget string
 	if scope == models.ScopeUser {
 		domainTarget = fmt.Sprintf("gui/%s", p.uid)
@@ -319,22 +343,30 @@ func (p *LaunchdProvider) Stop(name string, scope models.Scope) error {
 	// Try modern bootout first (opposite of bootstrap)
 	plistPath := p.findPlistForLabel(name, scope)
 	if plistPath != "" {
+		logger.Debug("attempting bootout", "target", serviceTarget)
 		cmd := exec.Command("launchctl", "bootout", serviceTarget)
 		if err := cmd.Run(); err == nil {
+			logger.Debug("service stopped via bootout", "name", name)
 			return nil
 		}
+		logger.Debug("bootout failed, trying alternatives")
 	}
 
 	// Fallback: try kill
+	logger.Debug("attempting kill", "target", serviceTarget)
 	cmd := exec.Command("launchctl", "kill", "SIGTERM", serviceTarget)
 	if err := cmd.Run(); err != nil {
+		logger.Debug("kill failed", "error", err)
 		// Final fallback: legacy unload
 		if plistPath != "" {
+			logger.Debug("attempting legacy unload", "plist", plistPath)
 			cmd = exec.Command("launchctl", "unload", plistPath)
 			return cmd.Run()
 		}
+		logger.Error("all stop methods failed", "name", name, "error", err)
 		return fmt.Errorf("failed to stop service: %w", err)
 	}
+	logger.Debug("service stopped", "name", name)
 	return nil
 }
 
@@ -467,6 +499,8 @@ func (p *LaunchdProvider) StreamLogs(ctx context.Context, name string, scope mod
 
 // CreateService creates a new launchd service with the given configuration
 func (p *LaunchdProvider) CreateService(config models.ServiceConfig, scope models.Scope) error {
+	logger.Debug("creating service", "name", config.Name, "program", config.Program, "scope", scope)
+
 	if config.Name == "" {
 		return fmt.Errorf("service name is required")
 	}
@@ -485,14 +519,18 @@ func (p *LaunchdProvider) CreateService(config models.ServiceConfig, scope model
 		return fmt.Errorf("invalid scope: %s", scope)
 	}
 
+	logger.Debug("target directory", "dir", targetDir)
+
 	// Ensure target directory exists
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		logger.Error("failed to create directory", "dir", targetDir, "error", err)
 		return fmt.Errorf("failed to create directory %s: %w", targetDir, err)
 	}
 
 	// Check if service already exists
 	plistPath := filepath.Join(targetDir, config.Name+".plist")
 	if _, err := os.Stat(plistPath); err == nil {
+		logger.Warn("service already exists", "name", config.Name, "path", plistPath)
 		return fmt.Errorf("service %s already exists", config.Name)
 	}
 
@@ -500,15 +538,19 @@ func (p *LaunchdProvider) CreateService(config models.ServiceConfig, scope model
 	plist := p.generatePlist(config)
 
 	// Write the plist file
+	logger.Debug("writing plist", "path", plistPath)
 	if err := os.WriteFile(plistPath, []byte(plist), 0644); err != nil {
+		logger.Error("failed to write plist", "path", plistPath, "error", err)
 		return fmt.Errorf("failed to write plist file: %w", err)
 	}
 
 	// Load the service if RunAtLoad is set
 	if config.RunAtLoad {
+		logger.Debug("starting service after creation", "name", config.Name)
 		return p.Start(config.Name, scope)
 	}
 
+	logger.Debug("service created", "name", config.Name)
 	return nil
 }
 
@@ -632,21 +674,29 @@ func escapeXML(s string) string {
 
 // DeleteService removes a launchd service
 func (p *LaunchdProvider) DeleteService(name string, scope models.Scope) error {
+	logger.Debug("deleting service", "name", name, "scope", scope)
+
 	plistPath := p.findPlistForLabel(name, scope)
 	if plistPath == "" {
+		logger.Error("service not found for deletion", "name", name, "scope", scope)
 		return fmt.Errorf("service not found: %s", name)
 	}
 
 	// Stop the service first (ignore errors if not running)
+	logger.Debug("stopping service before deletion", "name", name)
 	_ = p.Stop(name, scope)
 
 	// Disable the service
+	logger.Debug("disabling service before deletion", "name", name)
 	_ = p.Disable(name, scope)
 
 	// Delete the plist file
+	logger.Debug("removing plist file", "path", plistPath)
 	if err := os.Remove(plistPath); err != nil {
+		logger.Error("failed to delete plist", "path", plistPath, "error", err)
 		return fmt.Errorf("failed to delete service file: %w", err)
 	}
 
+	logger.Debug("service deleted", "name", name)
 	return nil
 }

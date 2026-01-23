@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"autorun/internal/api"
+	"autorun/internal/logger"
 	"autorun/internal/platform"
 )
 
@@ -34,15 +34,21 @@ func findAvailablePort(host string, startPort, maxAttempts int) (int, error) {
 func main() {
 	port := flag.Int("port", 8080, "Starting port to listen on (will auto-increment if in use)")
 	listen := flag.String("listen", "127.0.0.1", "Address to bind to")
+	verbose := flag.Bool("verbose", false, "Enable debug logging (or set LOG_LEVEL=debug)")
+	flag.BoolVar(verbose, "v", false, "Enable debug logging (shorthand)")
 	flag.Parse()
+
+	// Initialize logger
+	logger.Init(*verbose)
 
 	// Find an available port starting from the specified port
 	actualPort, err := findAvailablePort(*listen, *port, 100)
 	if err != nil {
-		log.Fatalf("Failed to find available port: %v", err)
+		logger.Error("failed to find available port", "error", err)
+		os.Exit(1)
 	}
 	if actualPort != *port {
-		log.Printf("Port %d is in use, using port %d instead", *port, actualPort)
+		logger.Info("port in use, using alternative", "requested", *port, "actual", actualPort)
 	}
 
 	// Warn about security implications of non-localhost binding
@@ -68,15 +74,17 @@ func main() {
 	// Detect platform and create provider
 	provider, err := platform.Detect()
 	if err != nil {
-		log.Fatalf("Failed to detect platform: %v", err)
+		logger.Error("failed to detect platform", "error", err)
+		os.Exit(1)
 	}
 
-	log.Printf("Detected platform: %s", provider.Name())
+	logger.Info("detected platform", "platform", provider.Name())
 
 	// Get embedded frontend
 	frontendFS, err := GetFrontendFS()
 	if err != nil {
-		log.Fatalf("Failed to load frontend: %v", err)
+		logger.Error("failed to load frontend", "error", err)
+		os.Exit(1)
 	}
 
 	// Create router
@@ -84,7 +92,7 @@ func main() {
 
 	// Start server
 	addr := fmt.Sprintf("%s:%d", *listen, actualPort)
-	log.Printf("Starting server at http://%s", addr)
+	logger.Info("starting server", "address", fmt.Sprintf("http://%s", addr))
 
 	srv := &http.Server{
 		Addr:              addr,
@@ -105,10 +113,11 @@ func main() {
 
 	select {
 	case sig := <-sigCh:
-		log.Printf("Shutting down (signal: %s)", sig)
+		logger.Info("shutting down", "signal", sig)
 	case err := <-serverErr:
 		if err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server failed: %v", err)
+			logger.Error("server failed", "error", err)
+			os.Exit(1)
 		}
 		return
 	}
@@ -116,13 +125,14 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Printf("Graceful shutdown failed: %v", err)
+		logger.Warn("graceful shutdown failed", "error", err)
 		if err := srv.Close(); err != nil {
-			log.Printf("Server close failed: %v", err)
+			logger.Error("server close failed", "error", err)
 		}
 	}
 
 	if err := <-serverErr; err != nil && err != http.ErrServerClosed {
-		log.Fatalf("Server failed: %v", err)
+		logger.Error("server failed", "error", err)
+		os.Exit(1)
 	}
 }

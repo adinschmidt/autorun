@@ -2,12 +2,12 @@ package api
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"time"
 
 	"github.com/gorilla/websocket"
 
+	"autorun/internal/logger"
 	"autorun/internal/models"
 	"autorun/internal/platform"
 )
@@ -37,12 +37,16 @@ func (ls *LogStreamer) HandleLogStream(w http.ResponseWriter, r *http.Request, s
 		scope = models.ScopeSystem
 	}
 
+	logger.Debug("websocket log stream requested", "service", serviceName, "scope", scope)
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("WebSocket upgrade failed: %v", err)
+		logger.Error("websocket upgrade failed", "service", serviceName, "error", err)
 		return
 	}
 	defer conn.Close()
+
+	logger.Info("websocket connected", "service", serviceName, "scope", scope)
 
 	// Create a context that cancels when the connection closes
 	ctx, cancel := context.WithCancel(r.Context())
@@ -52,6 +56,7 @@ func (ls *LogStreamer) HandleLogStream(w http.ResponseWriter, r *http.Request, s
 	go func() {
 		for {
 			if _, _, err := conn.ReadMessage(); err != nil {
+				logger.Debug("websocket client disconnected", "service", serviceName)
 				cancel()
 				return
 			}
@@ -61,6 +66,7 @@ func (ls *LogStreamer) HandleLogStream(w http.ResponseWriter, r *http.Request, s
 	// Start log streaming
 	logCh, err := ls.provider.StreamLogs(ctx, serviceName, scope)
 	if err != nil {
+		logger.Error("failed to start log stream", "service", serviceName, "scope", scope, "error", err)
 		conn.WriteMessage(websocket.TextMessage, []byte("Error: "+err.Error()))
 		return
 	}
@@ -72,13 +78,16 @@ func (ls *LogStreamer) HandleLogStream(w http.ResponseWriter, r *http.Request, s
 	for {
 		select {
 		case <-ctx.Done():
+			logger.Debug("websocket stream ended", "service", serviceName, "reason", "context cancelled")
 			return
 		case line, ok := <-logCh:
 			if !ok {
+				logger.Debug("websocket stream ended", "service", serviceName, "reason", "channel closed")
 				return
 			}
 			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := conn.WriteMessage(websocket.TextMessage, []byte(line)); err != nil {
+				logger.Debug("websocket write failed", "service", serviceName, "error", err)
 				return
 			}
 		}

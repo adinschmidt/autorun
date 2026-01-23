@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"autorun/internal/logger"
 	"autorun/internal/platform"
 )
 
@@ -44,12 +45,14 @@ func (r *Router) setupRoutes() {
 
 // handleServices handles GET /api/services and POST /api/services (create)
 func (r *Router) handleServices(w http.ResponseWriter, req *http.Request) {
+	logger.Debug("handling services request", "method", req.Method, "path", req.URL.Path)
 	switch req.Method {
 	case http.MethodGet:
 		r.handler.ListServices(w, req)
 	case http.MethodPost:
 		r.handler.CreateService(w, req)
 	default:
+		logger.Debug("method not allowed", "method", req.Method, "path", req.URL.Path)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
 }
@@ -61,6 +64,7 @@ func (r *Router) handleServiceAction(w http.ResponseWriter, req *http.Request) {
 	parts := strings.SplitN(path, "/", 2)
 
 	if len(parts) == 0 || parts[0] == "" {
+		logger.Debug("service name required", "path", req.URL.Path)
 		http.Error(w, "Service name required", http.StatusBadRequest)
 		return
 	}
@@ -71,6 +75,8 @@ func (r *Router) handleServiceAction(w http.ResponseWriter, req *http.Request) {
 		action = parts[1]
 	}
 
+	logger.Debug("handling service action", "service", serviceName, "action", action, "method", req.Method)
+
 	switch action {
 	case "":
 		// GET /api/services/{name} or DELETE /api/services/{name}
@@ -80,11 +86,13 @@ func (r *Router) handleServiceAction(w http.ResponseWriter, req *http.Request) {
 		case http.MethodDelete:
 			r.handler.DeleteService(w, req, serviceName)
 		default:
+			logger.Debug("method not allowed", "method", req.Method, "service", serviceName)
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 
 	case "start":
 		if req.Method != http.MethodPost {
+			logger.Debug("method not allowed for start", "method", req.Method, "service", serviceName)
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
@@ -92,6 +100,7 @@ func (r *Router) handleServiceAction(w http.ResponseWriter, req *http.Request) {
 
 	case "stop":
 		if req.Method != http.MethodPost {
+			logger.Debug("method not allowed for stop", "method", req.Method, "service", serviceName)
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
@@ -99,6 +108,7 @@ func (r *Router) handleServiceAction(w http.ResponseWriter, req *http.Request) {
 
 	case "restart":
 		if req.Method != http.MethodPost {
+			logger.Debug("method not allowed for restart", "method", req.Method, "service", serviceName)
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
@@ -106,6 +116,7 @@ func (r *Router) handleServiceAction(w http.ResponseWriter, req *http.Request) {
 
 	case "enable":
 		if req.Method != http.MethodPost {
+			logger.Debug("method not allowed for enable", "method", req.Method, "service", serviceName)
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
@@ -113,6 +124,7 @@ func (r *Router) handleServiceAction(w http.ResponseWriter, req *http.Request) {
 
 	case "disable":
 		if req.Method != http.MethodPost {
+			logger.Debug("method not allowed for disable", "method", req.Method, "service", serviceName)
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
@@ -123,6 +135,7 @@ func (r *Router) handleServiceAction(w http.ResponseWriter, req *http.Request) {
 		r.streamer.HandleLogStream(w, req, serviceName)
 
 	default:
+		logger.Debug("unknown action", "action", action, "service", serviceName)
 		http.Error(w, "Unknown action", http.StatusNotFound)
 	}
 }

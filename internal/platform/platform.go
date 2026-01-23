@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 
+	"autorun/internal/logger"
 	"autorun/internal/models"
 )
 
@@ -47,16 +48,23 @@ type ServiceProvider interface {
 
 // Detect detects the current platform and returns the appropriate ServiceProvider
 func Detect() (ServiceProvider, error) {
+	logger.Debug("detecting platform", "os", runtime.GOOS)
+
 	switch runtime.GOOS {
 	case "darwin":
+		logger.Debug("detected macOS, using launchd")
 		return NewLaunchdProvider()
 	case "linux":
 		// Check if systemd is available
-		if _, err := os.Stat("/run/systemd/system"); err == nil {
+		systemdPath := "/run/systemd/system"
+		if _, err := os.Stat(systemdPath); err == nil {
+			logger.Debug("detected Linux with systemd", "path", systemdPath)
 			return NewSystemdProvider()
 		}
+		logger.Error("systemd not detected", "path", systemdPath)
 		return nil, fmt.Errorf("systemd not detected on this Linux system")
 	default:
+		logger.Error("unsupported platform", "os", runtime.GOOS)
 		return nil, fmt.Errorf("unsupported platform: %s", runtime.GOOS)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"autorun/internal/logger"
 	"autorun/internal/models"
 	"autorun/internal/platform"
 )
@@ -56,6 +57,7 @@ func (h *Handler) GetPlatform(w http.ResponseWriter, r *http.Request) {
 // ListServices returns all services for the requested scope
 func (h *Handler) ListServices(w http.ResponseWriter, r *http.Request) {
 	scopeParam := r.URL.Query().Get("scope")
+	logger.Debug("listing services", "scope", scopeParam)
 
 	var allServices []models.Service
 
@@ -63,25 +65,29 @@ func (h *Handler) ListServices(w http.ResponseWriter, r *http.Request) {
 		// Get both system and user services
 		systemServices, err := h.provider.ListServices(models.ScopeSystem)
 		if err != nil {
-			// Log but don't fail - user might not have permissions
+			logger.Warn("failed to list system services", "error", err)
 		} else {
 			allServices = append(allServices, systemServices...)
+			logger.Debug("listed system services", "count", len(systemServices))
 		}
 
 		userServices, err := h.provider.ListServices(models.ScopeUser)
 		if err != nil {
-			// Log but don't fail
+			logger.Warn("failed to list user services", "error", err)
 		} else {
 			allServices = append(allServices, userServices...)
+			logger.Debug("listed user services", "count", len(userServices))
 		}
 	} else {
 		scope := parseScope(r)
 		services, err := h.provider.ListServices(scope)
 		if err != nil {
+			logger.Error("failed to list services", "scope", scope, "error", err)
 			errorResponse(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		allServices = services
+		logger.Debug("listed services", "scope", scope, "count", len(services))
 	}
 
 	jsonResponse(w, http.StatusOK, allServices)
@@ -90,8 +96,10 @@ func (h *Handler) ListServices(w http.ResponseWriter, r *http.Request) {
 // GetService returns details for a specific service
 func (h *Handler) GetService(w http.ResponseWriter, r *http.Request, name string) {
 	scope := parseScope(r)
+	logger.Debug("getting service", "name", name, "scope", scope)
 	service, err := h.provider.GetService(name, scope)
 	if err != nil {
+		logger.Debug("service not found", "name", name, "scope", scope, "error", err)
 		errorResponse(w, http.StatusNotFound, err.Error())
 		return
 	}
@@ -101,50 +109,65 @@ func (h *Handler) GetService(w http.ResponseWriter, r *http.Request, name string
 // StartService starts a service
 func (h *Handler) StartService(w http.ResponseWriter, r *http.Request, name string) {
 	scope := parseScope(r)
+	logger.Info("starting service", "name", name, "scope", scope)
 	if err := h.provider.Start(name, scope); err != nil {
+		logger.Error("failed to start service", "name", name, "scope", scope, "error", err)
 		errorResponse(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	logger.Info("service started", "name", name, "scope", scope)
 	jsonResponse(w, http.StatusOK, map[string]string{"status": "started"})
 }
 
 // StopService stops a service
 func (h *Handler) StopService(w http.ResponseWriter, r *http.Request, name string) {
 	scope := parseScope(r)
+	logger.Info("stopping service", "name", name, "scope", scope)
 	if err := h.provider.Stop(name, scope); err != nil {
+		logger.Error("failed to stop service", "name", name, "scope", scope, "error", err)
 		errorResponse(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	logger.Info("service stopped", "name", name, "scope", scope)
 	jsonResponse(w, http.StatusOK, map[string]string{"status": "stopped"})
 }
 
 // RestartService restarts a service
 func (h *Handler) RestartService(w http.ResponseWriter, r *http.Request, name string) {
 	scope := parseScope(r)
+	logger.Info("restarting service", "name", name, "scope", scope)
 	if err := h.provider.Restart(name, scope); err != nil {
+		logger.Error("failed to restart service", "name", name, "scope", scope, "error", err)
 		errorResponse(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	logger.Info("service restarted", "name", name, "scope", scope)
 	jsonResponse(w, http.StatusOK, map[string]string{"status": "restarted"})
 }
 
 // EnableService enables a service
 func (h *Handler) EnableService(w http.ResponseWriter, r *http.Request, name string) {
 	scope := parseScope(r)
+	logger.Info("enabling service", "name", name, "scope", scope)
 	if err := h.provider.Enable(name, scope); err != nil {
+		logger.Error("failed to enable service", "name", name, "scope", scope, "error", err)
 		errorResponse(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	logger.Info("service enabled", "name", name, "scope", scope)
 	jsonResponse(w, http.StatusOK, map[string]string{"status": "enabled"})
 }
 
 // DisableService disables a service
 func (h *Handler) DisableService(w http.ResponseWriter, r *http.Request, name string) {
 	scope := parseScope(r)
+	logger.Info("disabling service", "name", name, "scope", scope)
 	if err := h.provider.Disable(name, scope); err != nil {
+		logger.Error("failed to disable service", "name", name, "scope", scope, "error", err)
 		errorResponse(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	logger.Info("service disabled", "name", name, "scope", scope)
 	jsonResponse(w, http.StatusOK, map[string]string{"status": "disabled"})
 }
 
@@ -154,25 +177,31 @@ func (h *Handler) CreateService(w http.ResponseWriter, r *http.Request) {
 
 	var config models.ServiceConfig
 	if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
+		logger.Warn("invalid create service request body", "error", err)
 		errorResponse(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
 		return
 	}
 
 	// Validate required fields
 	if config.Name == "" {
+		logger.Warn("create service missing name")
 		errorResponse(w, http.StatusBadRequest, "Service name is required")
 		return
 	}
 	if config.Program == "" {
+		logger.Warn("create service missing program", "name", config.Name)
 		errorResponse(w, http.StatusBadRequest, "Program path is required")
 		return
 	}
 
+	logger.Info("creating service", "name", config.Name, "program", config.Program, "scope", scope)
 	if err := h.provider.CreateService(config, scope); err != nil {
+		logger.Error("failed to create service", "name", config.Name, "scope", scope, "error", err)
 		errorResponse(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
+	logger.Info("service created", "name", config.Name, "scope", scope)
 	jsonResponse(w, http.StatusCreated, map[string]string{
 		"status": "created",
 		"name":   config.Name,
@@ -182,10 +211,13 @@ func (h *Handler) CreateService(w http.ResponseWriter, r *http.Request) {
 // DeleteService deletes a service
 func (h *Handler) DeleteService(w http.ResponseWriter, r *http.Request, name string) {
 	scope := parseScope(r)
+	logger.Info("deleting service", "name", name, "scope", scope)
 	if err := h.provider.DeleteService(name, scope); err != nil {
+		logger.Error("failed to delete service", "name", name, "scope", scope, "error", err)
 		errorResponse(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	logger.Info("service deleted", "name", name, "scope", scope)
 	jsonResponse(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
