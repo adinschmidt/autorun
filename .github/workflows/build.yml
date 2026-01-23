@@ -92,6 +92,7 @@ jobs:
           mv artifacts/autorun-macos-x86_64/autorun release/autorun-macos-x86_64
           mv artifacts/autorun-macos-arm64/autorun release/autorun-macos-arm64
           mv artifacts/autorun-linux-x86_64/autorun release/autorun-linux-x86_64
+          chmod +x release/autorun-macos-* release/autorun-linux-*
           ls -la release/
 
       - name: Create Release
