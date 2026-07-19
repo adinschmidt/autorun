@@ -6,6 +6,7 @@ const state = {
     services: [],
     filteredServices: [],
     selectedService: null,
+    deleteTarget: null,
     currentScope: 'all',
     searchQuery: '',
     logSocket: null,
@@ -119,10 +120,10 @@ const actionDone = {
     disable: 'Disabled'
 };
 
-async function performAction(action) {
-    if (!state.selectedService) return;
+async function performAction(action, target = state.selectedService) {
+    if (!target) return;
 
-    const { name, scope } = state.selectedService;
+    const { name, scope } = target;
 
     try {
         setControlsLoading(true);
@@ -132,26 +133,17 @@ async function performAction(action) {
         // Wait briefly for launchd/systemd to update status before refreshing
         await new Promise(resolve => setTimeout(resolve, 500));
 
-        // Refresh services after action
+        // Refresh services (re-renders the list with fresh statuses)
         await fetchServices();
 
-        // Update selected service with new data
-        const updated = state.services.find(s => s.name === name && s.scope === scope);
-        if (updated) {
-            // Update UI without reconnecting log stream
-            state.selectedService = updated;
-            elements.detailStatus.className = `status-indicator ${updated.status}`;
-            updateControlButtons(updated);
-
-            // Update the list item status
-            const listItem = elements.serviceList.querySelector(
-                `.service-item[data-name="${CSS.escape(name)}"][data-scope="${scope}"]`
+        // Update the detail view without reconnecting the log stream
+        if (state.selectedService) {
+            const updated = state.services.find(
+                s => s.name === state.selectedService.name && s.scope === state.selectedService.scope
             );
-            if (listItem) {
-                const statusDot = listItem.querySelector('.service-status');
-                if (statusDot) {
-                    statusDot.className = `service-status ${updated.status}`;
-                }
+            if (updated) {
+                state.selectedService = updated;
+                elements.detailStatus.className = `status-indicator ${updated.status}`;
             }
         }
     } catch (err) {
@@ -260,35 +252,40 @@ function parseArguments(str) {
 // Delete Service
 // ═══════════════════════════════════════════════════════════
 
-function openDeleteModal() {
-    if (!state.selectedService) return;
-    elements.deleteServiceName.textContent = state.selectedService.name;
+function openDeleteModal(target = state.selectedService) {
+    if (!target) return;
+    state.deleteTarget = target;
+    elements.deleteServiceName.textContent = target.name;
     elements.deleteModal.style.display = 'flex';
 }
 
 function closeDeleteModal() {
     elements.deleteModal.style.display = 'none';
+    state.deleteTarget = null;
 }
 
 async function handleDeleteService() {
-    if (!state.selectedService) return;
+    const target = state.deleteTarget;
+    if (!target) return;
 
-    const { name, scope } = state.selectedService;
+    const { name, scope } = target;
 
     try {
         await api('DELETE', `/api/services/${encodeURIComponent(name)}?scope=${scope}`);
         showToast(`Deleted ${name}`, 'success');
         closeDeleteModal();
 
-        // Clear selection and refresh
-        state.selectedService = null;
-        elements.serviceDetail.style.display = 'none';
-        elements.emptyState.style.display = 'flex';
+        // If the deleted service was open in the detail view, clear it
+        if (state.selectedService &&
+            state.selectedService.name === name && state.selectedService.scope === scope) {
+            state.selectedService = null;
+            elements.serviceDetail.style.display = 'none';
+            elements.emptyState.style.display = 'flex';
 
-        // Close log stream
-        if (state.logSocket) {
-            state.logSocket.close();
-            state.logSocket = null;
+            if (state.logSocket) {
+                state.logSocket.close();
+                state.logSocket = null;
+            }
         }
 
         await fetchServices();
@@ -356,6 +353,179 @@ function appendLogLine(text) {
     while (elements.logContent.children.length > maxLines) {
         elements.logContent.removeChild(elements.logContent.firstChild);
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Context Menus
+// ═══════════════════════════════════════════════════════════
+
+let contextMenu = null;
+let contextTargetRow = null;
+
+function closeContextMenu() {
+    if (contextMenu) {
+        contextMenu.remove();
+        contextMenu = null;
+    }
+    if (contextTargetRow) {
+        contextTargetRow.classList.remove('context-target');
+        contextTargetRow = null;
+    }
+}
+
+// items: {label, action, disabled?, danger?} or 'separator'
+function showContextMenu(items, x, y) {
+    closeContextMenu();
+
+    const menu = document.createElement('div');
+    menu.className = 'context-menu';
+
+    for (const item of items) {
+        if (item === 'separator') {
+            const sep = document.createElement('div');
+            sep.className = 'context-separator';
+            menu.appendChild(sep);
+            continue;
+        }
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'context-item' + (item.danger ? ' danger' : '');
+        btn.textContent = item.label;
+        btn.disabled = !!item.disabled;
+        btn.addEventListener('click', () => {
+            closeContextMenu();
+            item.action();
+        });
+        menu.appendChild(btn);
+    }
+
+    // Keep focus (and any text selection) where it is while clicking items
+    menu.addEventListener('mousedown', (e) => e.preventDefault());
+
+    document.body.appendChild(menu);
+
+    // Clamp to the viewport
+    const rect = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
+    menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - rect.height - 8))}px`;
+
+    contextMenu = menu;
+}
+
+async function copyText(text) {
+    try {
+        await navigator.clipboard.writeText(text);
+    } catch (err) {
+        console.error('Clipboard write failed:', err);
+        showToast("Couldn't copy to clipboard", 'error');
+    }
+}
+
+function showServiceContextMenu(service, x, y) {
+    const running = service.status === 'running';
+
+    showContextMenu([
+        { label: 'Start', disabled: running, action: () => performAction('start', service) },
+        { label: 'Stop', disabled: !running, action: () => performAction('stop', service) },
+        { label: 'Restart', disabled: !running, action: () => performAction('restart', service) },
+        'separator',
+        service.enabled
+            ? { label: 'Disable at startup', action: () => performAction('disable', service) }
+            : { label: 'Enable at startup', action: () => performAction('enable', service) },
+        'separator',
+        { label: 'Copy name', action: () => copyText(service.name) },
+        'separator',
+        { label: 'Delete…', danger: true, action: () => openDeleteModal(service) }
+    ], x, y);
+}
+
+function showInputContextMenu(input, x, y) {
+    input.focus();
+    const start = input.selectionStart;
+    const end = input.selectionEnd;
+    const hasSelection = start !== end;
+    const restoreSelection = () => {
+        input.focus();
+        input.setSelectionRange(start, end);
+    };
+    // Re-run listeners (e.g. live search filtering) after edits
+    const notifyInput = () => input.dispatchEvent(new Event('input', { bubbles: true }));
+
+    showContextMenu([
+        {
+            label: 'Cut',
+            disabled: !hasSelection,
+            action: () => {
+                restoreSelection();
+                copyText(input.value.slice(start, end));
+                input.setRangeText('', start, end, 'start');
+                notifyInput();
+            }
+        },
+        {
+            label: 'Copy',
+            disabled: !hasSelection,
+            action: () => copyText(input.value.slice(start, end))
+        },
+        {
+            label: 'Paste',
+            action: async () => {
+                restoreSelection();
+                try {
+                    const text = await navigator.clipboard.readText();
+                    input.setRangeText(text, start, end, 'end');
+                    notifyInput();
+                } catch (err) {
+                    console.error('Clipboard read failed:', err);
+                    showToast("Couldn't read the clipboard — paste with ⌘V instead", 'error');
+                }
+            }
+        },
+        'separator',
+        {
+            label: 'Select all',
+            disabled: !input.value,
+            action: () => {
+                input.focus();
+                input.select();
+            }
+        }
+    ], x, y);
+}
+
+function handleContextMenu(e) {
+    // This is an app, not a document: replace the browser menu everywhere
+    e.preventDefault();
+
+    const row = e.target.closest('.service-item');
+    if (row) {
+        const service = state.services.find(
+            s => s.name === row.dataset.name && s.scope === row.dataset.scope
+        );
+        if (service) {
+            contextTargetRow = row;
+            row.classList.add('context-target');
+            showServiceContextMenu(service, e.clientX, e.clientY);
+        }
+        return;
+    }
+
+    const input = e.target.closest('input[type="text"]');
+    if (input) {
+        showInputContextMenu(input, e.clientX, e.clientY);
+        return;
+    }
+
+    // Selected text anywhere else (log lines, descriptions): offer Copy
+    const selection = String(window.getSelection());
+    if (selection) {
+        showContextMenu([
+            { label: 'Copy', action: () => copyText(selection) }
+        ], e.clientX, e.clientY);
+        return;
+    }
+
+    closeContextMenu();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -537,12 +707,20 @@ function setupEventListeners() {
     });
 
     // Delete service
-    elements.deleteBtn.addEventListener('click', openDeleteModal);
+    elements.deleteBtn.addEventListener('click', () => openDeleteModal());
     elements.deleteCancel.addEventListener('click', closeDeleteModal);
     elements.deleteConfirm.addEventListener('click', handleDeleteService);
     elements.deleteModal.addEventListener('click', (e) => {
         if (e.target === elements.deleteModal) closeDeleteModal();
     });
+
+    // Context menus
+    document.addEventListener('contextmenu', handleContextMenu);
+    document.addEventListener('click', (e) => {
+        if (contextMenu && !contextMenu.contains(e.target)) closeContextMenu();
+    });
+    window.addEventListener('resize', closeContextMenu);
+    document.addEventListener('scroll', closeContextMenu, true);
 
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
@@ -552,9 +730,11 @@ function setupEventListeners() {
             elements.searchInput.focus();
         }
 
-        // Escape to close modals or clear search
+        // Escape to dismiss the context menu, modals, or search — in that order
         if (e.key === 'Escape') {
-            if (elements.createModal.style.display !== 'none') {
+            if (contextMenu) {
+                closeContextMenu();
+            } else if (elements.createModal.style.display !== 'none') {
                 closeCreateModal();
             } else if (elements.deleteModal.style.display !== 'none') {
                 closeDeleteModal();
