@@ -773,9 +773,9 @@ body::after {
     padding: 11px 16px;
     border-radius: 16px;
     border: 1px solid var(--glass-edge);
-    background: linear-gradient(160deg, rgba(40, 47, 66, 0.85), rgba(28, 33, 50, 0.85));
-    -webkit-backdrop-filter: blur(20px) saturate(150%);
-    backdrop-filter: blur(20px) saturate(150%);
+    background: linear-gradient(160deg, rgba(58, 67, 92, 0.55), rgba(32, 38, 58, 0.6));
+    -webkit-backdrop-filter: blur(28px) saturate(160%);
+    backdrop-filter: blur(28px) saturate(160%);
     box-shadow: 0 16px 40px -12px rgba(3, 6, 18, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.12);
     color: var(--ink);
     font-size: 12.5px;
@@ -820,7 +820,7 @@ body::after {
     align-items: center;
     justify-content: center;
     padding: 20px;
-    background: rgba(5, 8, 18, 0.5);
+    background: rgba(5, 8, 18, 0.35);
     -webkit-backdrop-filter: blur(10px);
     backdrop-filter: blur(10px);
     animation: fade-in 0.2s ease;
@@ -836,7 +836,10 @@ body::after {
     max-width: 520px;
     max-height: calc(100vh - 40px);
     overflow-y: auto;
-    background: linear-gradient(160deg, rgba(44, 51, 72, 0.9), rgba(26, 31, 48, 0.92));
+    background: linear-gradient(160deg, rgba(66, 76, 106, 0.42), rgba(30, 36, 58, 0.48));
+    -webkit-backdrop-filter: blur(44px) saturate(170%);
+    backdrop-filter: blur(44px) saturate(170%);
+    border-color: rgba(255, 255, 255, 0.18);
     animation: modal-in 0.35s var(--ease-liquid);
 }
 
