@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"autorun/internal/logger"
@@ -53,6 +54,49 @@ func (p *SystemdProvider) getUserScopeArgs() []string {
 	return []string{"--user"}
 }
 
+// userUnitDir returns the directory holding user-scope unit files. When running
+// as root on behalf of a target user, this must be that user's home directory,
+// not root's, so the user's systemd instance can see the units.
+func (p *SystemdProvider) userUnitDir() (string, error) {
+	if p.targetUser != "" {
+		u, err := user.Lookup(p.targetUser)
+		if err != nil {
+			return "", fmt.Errorf("failed to look up user %s: %w", p.targetUser, err)
+		}
+		return filepath.Join(u.HomeDir, ".config", "systemd", "user"), nil
+	}
+
+	u, err := user.Current()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current user: %w", err)
+	}
+	return filepath.Join(u.HomeDir, ".config", "systemd", "user"), nil
+}
+
+// chownToTargetUser makes paths owned by the target user when running as root
+// on their behalf, so files created in their home stay under their control.
+// Best effort: failures are logged, not returned.
+func (p *SystemdProvider) chownToTargetUser(paths ...string) {
+	if p.targetUser == "" {
+		return
+	}
+	u, err := user.Lookup(p.targetUser)
+	if err != nil {
+		logger.Warn("failed to look up target user for chown", "user", p.targetUser, "error", err)
+		return
+	}
+	uid, err1 := strconv.Atoi(u.Uid)
+	gid, err2 := strconv.Atoi(u.Gid)
+	if err1 != nil || err2 != nil {
+		return
+	}
+	for _, path := range paths {
+		if err := os.Chown(path, uid, gid); err != nil {
+			logger.Warn("failed to chown to target user", "path", path, "error", err)
+		}
+	}
+}
+
 // systemdUnit represents a unit from systemctl list-units --output=json
 type systemdUnit struct {
 	Unit        string `json:"unit"`
@@ -93,16 +137,41 @@ func (p *SystemdProvider) listUnits(scope models.Scope) ([]systemdUnit, error) {
 	return units, nil
 }
 
-func (p *SystemdProvider) isEnabled(name string, scope models.Scope) bool {
+// systemdUnitFile represents a unit file from systemctl list-unit-files --output=json
+type systemdUnitFile struct {
+	UnitFile string `json:"unit_file"`
+	State    string `json:"state"`
+}
+
+// listUnitFileStates returns a map of unit file name -> enablement state
+// (enabled, disabled, static, masked, ...) in a single systemctl call.
+func (p *SystemdProvider) listUnitFileStates(scope models.Scope) (map[string]string, error) {
 	var args []string
 	if scope == models.ScopeUser {
 		args = append(args, p.getUserScopeArgs()...)
 	}
-	args = append(args, "is-enabled", name)
+	args = append(args, "list-unit-files", "--type=service", "--output=json")
 
 	cmd := exec.Command("systemctl", args...)
-	output, _ := cmd.Output()
-	return strings.TrimSpace(string(output)) == "enabled"
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("systemctl list-unit-files failed: %w", err)
+	}
+
+	var files []systemdUnitFile
+	if err := json.Unmarshal(output, &files); err != nil {
+		return nil, fmt.Errorf("failed to parse systemctl output: %w", err)
+	}
+
+	states := make(map[string]string, len(files))
+	for _, f := range files {
+		states[f.UnitFile] = f.State
+	}
+	return states, nil
+}
+
+func isEnabledState(state string) bool {
+	return state == "enabled" || state == "enabled-runtime"
 }
 
 func (p *SystemdProvider) ListServices(scope models.Scope) ([]models.Service, error) {
@@ -111,13 +180,20 @@ func (p *SystemdProvider) ListServices(scope models.Scope) ([]models.Service, er
 		return nil, err
 	}
 
-	var services []models.Service
+	fileStates, err := p.listUnitFileStates(scope)
+	if err != nil {
+		// Enablement info is non-essential; still list the units themselves.
+		logger.Warn("failed to list unit files", "scope", scope, "error", err)
+		fileStates = map[string]string{}
+	}
+
+	services := make([]models.Service, 0, len(units))
+	seen := make(map[string]bool, len(units))
 	for _, unit := range units {
+		seen[unit.Unit] = true
+
 		// Extract service name without .service suffix
-		name := unit.Unit
-		if strings.HasSuffix(name, ".service") {
-			name = strings.TrimSuffix(name, ".service")
-		}
+		name := strings.TrimSuffix(unit.Unit, ".service")
 
 		status := models.StatusUnknown
 		switch unit.Active {
@@ -137,9 +213,25 @@ func (p *SystemdProvider) ListServices(scope models.Scope) ([]models.Service, er
 			Name:        name,
 			DisplayName: name,
 			Status:      status,
-			Enabled:     p.isEnabled(unit.Unit, scope),
+			Enabled:     isEnabledState(fileStates[unit.Unit]),
 			Scope:       scope,
 			Description: unit.Description,
+		})
+	}
+
+	// Include installed unit files that aren't currently loaded (typically
+	// disabled services that haven't run this boot), which list-units omits.
+	for unitFile, state := range fileStates {
+		if seen[unitFile] || strings.HasSuffix(unitFile, "@.service") || state == "alias" {
+			continue
+		}
+		name := strings.TrimSuffix(unitFile, ".service")
+		services = append(services, models.Service{
+			Name:        name,
+			DisplayName: name,
+			Status:      models.StatusStopped,
+			Enabled:     isEnabledState(state),
+			Scope:       scope,
 		})
 	}
 
@@ -241,6 +333,8 @@ func (p *SystemdProvider) StreamLogs(ctx context.Context, name string, scope mod
 		defer cmd.Wait()
 
 		scanner := bufio.NewScanner(stdout)
+		// Allow long log lines; the default 64KB token limit kills the stream.
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			select {
 			case <-ctx.Done():
@@ -270,12 +364,12 @@ func (p *SystemdProvider) CreateService(config models.ServiceConfig, scope model
 	var targetDir string
 	switch scope {
 	case models.ScopeUser:
-		u, err := user.Current()
+		dir, err := p.userUnitDir()
 		if err != nil {
-			logger.Error("failed to get current user", "error", err)
-			return fmt.Errorf("failed to get current user: %w", err)
+			logger.Error("failed to resolve user unit directory", "error", err)
+			return err
 		}
-		targetDir = filepath.Join(u.HomeDir, ".config", "systemd", "user")
+		targetDir = dir
 	case models.ScopeSystem:
 		targetDir = "/etc/systemd/system"
 	default:
@@ -311,6 +405,9 @@ func (p *SystemdProvider) CreateService(config models.ServiceConfig, scope model
 	if err := os.WriteFile(unitPath, []byte(unitContent), 0644); err != nil {
 		logger.Error("failed to write unit file", "path", unitPath, "error", err)
 		return fmt.Errorf("failed to write unit file: %w", err)
+	}
+	if scope == models.ScopeUser {
+		p.chownToTargetUser(targetDir, unitPath)
 	}
 
 	// Reload systemd to pick up the new unit
@@ -429,12 +526,12 @@ func (p *SystemdProvider) DeleteService(name string, scope models.Scope) error {
 	var targetDir string
 	switch scope {
 	case models.ScopeUser:
-		u, err := user.Current()
+		dir, err := p.userUnitDir()
 		if err != nil {
-			logger.Error("failed to get current user", "error", err)
-			return fmt.Errorf("failed to get current user: %w", err)
+			logger.Error("failed to resolve user unit directory", "error", err)
+			return err
 		}
-		targetDir = filepath.Join(u.HomeDir, ".config", "systemd", "user")
+		targetDir = dir
 	case models.ScopeSystem:
 		targetDir = "/etc/systemd/system"
 	default:

@@ -67,11 +67,13 @@ func (ls *LogStreamer) HandleLogStream(w http.ResponseWriter, r *http.Request, s
 	logCh, err := ls.provider.StreamLogs(ctx, serviceName, scope)
 	if err != nil {
 		logger.Error("failed to start log stream", "service", serviceName, "scope", scope, "error", err)
+		conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		conn.WriteMessage(websocket.TextMessage, []byte("Error: "+err.Error()))
 		return
 	}
 
 	// Send an initial message
+	conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	conn.WriteMessage(websocket.TextMessage, []byte("--- Connected to log stream for "+serviceName+" ---"))
 
 	// Stream logs to the WebSocket

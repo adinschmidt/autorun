@@ -59,7 +59,8 @@ func (h *Handler) ListServices(w http.ResponseWriter, r *http.Request) {
 	scopeParam := r.URL.Query().Get("scope")
 	logger.Debug("listing services", "scope", scopeParam)
 
-	var allServices []models.Service
+	// Non-nil so an empty result encodes as [] rather than null.
+	allServices := []models.Service{}
 
 	if scopeParam == "all" || scopeParam == "" {
 		// Get both system and user services
@@ -86,7 +87,7 @@ func (h *Handler) ListServices(w http.ResponseWriter, r *http.Request) {
 			errorResponse(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		allServices = services
+		allServices = append(allServices, services...)
 		logger.Debug("listed services", "scope", scope, "count", len(services))
 	}
 

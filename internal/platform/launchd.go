@@ -195,18 +195,27 @@ func (p *LaunchdProvider) findPlistForLabel(label string, scope models.Scope) st
 	return ""
 }
 
+// domainTarget returns the launchctl domain target for a scope.
+func (p *LaunchdProvider) domainTarget(scope models.Scope) string {
+	if scope == models.ScopeUser {
+		return fmt.Sprintf("gui/%s", p.uid)
+	}
+	return "system"
+}
+
+// serviceTarget returns the launchctl service target for a service in a scope.
+func (p *LaunchdProvider) serviceTarget(name string, scope models.Scope) string {
+	return fmt.Sprintf("%s/%s", p.domainTarget(scope), name)
+}
+
 func (p *LaunchdProvider) ListServices(scope models.Scope) ([]models.Service, error) {
-	var domainTarget string
 	switch scope {
-	case models.ScopeUser:
-		domainTarget = fmt.Sprintf("gui/%s", p.uid)
-	case models.ScopeSystem:
-		domainTarget = "system"
+	case models.ScopeUser, models.ScopeSystem:
 	default:
 		return nil, fmt.Errorf("invalid scope: %s", scope)
 	}
 
-	entries, err := p.listDomainServices(domainTarget)
+	entries, err := p.listDomainServices(p.domainTarget(scope))
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +231,7 @@ func (p *LaunchdProvider) ListServices(scope models.Scope) ([]models.Service, er
 	// Launchd doesn't have a single query that returns "enabled" for every service
 	// the way systemd does. We approximate enabled/disabled using
 	// `launchctl print-disabled <domain>` and fall back to filesystem presence.
-	disabledByLabel := p.listDisabledServices(domainTarget)
+	disabledByLabel := p.listDisabledServices(p.domainTarget(scope))
 
 	knownLabels := make(map[string]bool)
 	dirs := p.getServiceDirs(scope)
@@ -247,7 +256,9 @@ func (p *LaunchdProvider) ListServices(scope models.Scope) ([]models.Service, er
 			status = models.StatusRunning
 		}
 
-		enabled := knownLabels[label]
+		// A plist on disk loads at boot/login unless launchd has recorded a
+		// disabled override for it.
+		enabled := true
 		if disabled, ok := disabledByLabel[label]; ok {
 			enabled = !disabled
 		}
@@ -288,13 +299,8 @@ func (p *LaunchdProvider) Start(name string, scope models.Scope) error {
 		return fmt.Errorf("plist not found for service: %s", name)
 	}
 
-	var domainTarget string
-	if scope == models.ScopeUser {
-		domainTarget = fmt.Sprintf("gui/%s", p.uid)
-	} else {
-		domainTarget = "system"
-	}
-	serviceTarget := fmt.Sprintf("%s/%s", domainTarget, name)
+	domainTarget := p.domainTarget(scope)
+	serviceTarget := p.serviceTarget(name, scope)
 
 	// Try modern bootstrap first (macOS 10.10+)
 	// bootstrap loads the service into the domain
@@ -332,13 +338,7 @@ func (p *LaunchdProvider) Start(name string, scope models.Scope) error {
 func (p *LaunchdProvider) Stop(name string, scope models.Scope) error {
 	logger.Debug("stopping service", "name", name, "scope", scope)
 
-	var domainTarget string
-	if scope == models.ScopeUser {
-		domainTarget = fmt.Sprintf("gui/%s", p.uid)
-	} else {
-		domainTarget = "system"
-	}
-	serviceTarget := fmt.Sprintf("%s/%s", domainTarget, name)
+	serviceTarget := p.serviceTarget(name, scope)
 
 	// Try modern bootout first (opposite of bootstrap)
 	plistPath := p.findPlistForLabel(name, scope)
@@ -371,30 +371,37 @@ func (p *LaunchdProvider) Stop(name string, scope models.Scope) error {
 }
 
 func (p *LaunchdProvider) Restart(name string, scope models.Scope) error {
-	if err := p.Stop(name, scope); err != nil {
-		// Ignore stop errors, service might not be running
-	}
+	// Ignore stop errors; the service might not be running.
+	_ = p.Stop(name, scope)
 	return p.Start(name, scope)
 }
 
+// Enable clears the launchd disabled override so the service loads at
+// boot/login. Unlike the legacy `load -w`, this doesn't also start it.
 func (p *LaunchdProvider) Enable(name string, scope models.Scope) error {
-	plistPath := p.findPlistForLabel(name, scope)
-	if plistPath == "" {
+	if p.findPlistForLabel(name, scope) == "" {
 		return fmt.Errorf("plist not found for service: %s", name)
 	}
 
-	cmd := exec.Command("launchctl", "load", "-w", plistPath)
-	return cmd.Run()
+	cmd := exec.Command("launchctl", "enable", p.serviceTarget(name, scope))
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("launchctl enable failed: %s", strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
+// Disable records a launchd disabled override so the service won't load at
+// boot/login. Unlike the legacy `unload -w`, this doesn't also stop it.
 func (p *LaunchdProvider) Disable(name string, scope models.Scope) error {
-	plistPath := p.findPlistForLabel(name, scope)
-	if plistPath == "" {
+	if p.findPlistForLabel(name, scope) == "" {
 		return fmt.Errorf("plist not found for service: %s", name)
 	}
 
-	cmd := exec.Command("launchctl", "unload", "-w", plistPath)
-	return cmd.Run()
+	cmd := exec.Command("launchctl", "disable", p.serviceTarget(name, scope))
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("launchctl disable failed: %s", strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
 // getProcessNameForService extracts the program/process name from a plist file
@@ -457,16 +464,22 @@ func (p *LaunchdProvider) getProcessNameForService(name string, scope models.Sco
 	return parts[len(parts)-1]
 }
 
+// sanitizePredicateValue strips characters that would break out of a quoted
+// string in a `log stream` predicate.
+func sanitizePredicateValue(s string) string {
+	return strings.NewReplacer("'", "", `"`, "", `\`, "").Replace(s)
+}
+
 func (p *LaunchdProvider) StreamLogs(ctx context.Context, name string, scope models.Scope) (<-chan string, error) {
 	ch := make(chan string, 100)
 
 	// Get the program name from the plist to use in log filtering
-	processName := p.getProcessNameForService(name, scope)
+	processName := sanitizePredicateValue(p.getProcessNameForService(name, scope))
 
 	// Use log stream with predicate to filter by process name
 	// We use CONTAINS for more flexible matching since process names may vary
 	predicate := fmt.Sprintf("process == '%s' OR process CONTAINS '%s' OR subsystem CONTAINS '%s'",
-		processName, processName, name)
+		processName, processName, sanitizePredicateValue(name))
 	cmd := exec.CommandContext(ctx, "log", "stream",
 		"--predicate", predicate,
 		"--style", "compact")
@@ -485,6 +498,8 @@ func (p *LaunchdProvider) StreamLogs(ctx context.Context, name string, scope mod
 		defer cmd.Wait()
 
 		scanner := bufio.NewScanner(stdout)
+		// Allow long log lines; the default 64KB token limit kills the stream.
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			select {
 			case <-ctx.Done():

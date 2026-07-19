@@ -73,7 +73,7 @@ async function fetchPlatform() {
         const data = await api('GET', '/api/platform');
         state.platform = data.platform;
         state.elevated = data.elevated;
-        elements.platformBadge.textContent = data.platform.toUpperCase();
+        elements.platformBadge.textContent = data.platform;
         elements.platformBadge.classList.add('detected');
 
         // Show elevation warning if not running as root
@@ -91,7 +91,7 @@ function showElevationWarning() {
     warning.className = 'elevation-warning';
     warning.innerHTML = `
         <span class="warning-icon">!</span>
-        <span class="warning-text">Limited mode - run with sudo to modify system services</span>
+        <span class="warning-text">Running without sudo &mdash; system services are read-only</span>
     `;
     document.querySelector('.sidebar-header').appendChild(warning);
 }
@@ -99,18 +99,25 @@ function showElevationWarning() {
 async function fetchServices() {
     try {
         const scopeParam = state.currentScope === 'all' ? '' : `?scope=${state.currentScope}`;
-        state.services = await api('GET', `/api/services${scopeParam}`);
+        state.services = (await api('GET', `/api/services${scopeParam}`)) || [];
         filterAndRenderServices();
     } catch (err) {
         console.error('Failed to fetch services:', err);
-        showToast('Failed to load services. Is the server running and accessible?', 'error');
+        showToast('Couldn\'t load services. Is the server still running?', 'error');
         elements.serviceList.innerHTML = `
-            <div class="loading-state">
-                <span style="color: var(--status-stopped);">ERROR LOADING SERVICES</span>
-            </div>
+            <div class="list-message error">Couldn't load services</div>
         `;
+        elements.serviceCount.textContent = '0';
     }
 }
+
+const actionDone = {
+    start: 'Started',
+    stop: 'Stopped',
+    restart: 'Restarted',
+    enable: 'Enabled',
+    disable: 'Disabled'
+};
 
 async function performAction(action) {
     if (!state.selectedService) return;
@@ -120,7 +127,7 @@ async function performAction(action) {
     try {
         setControlsLoading(true);
         await api('POST', `/api/services/${encodeURIComponent(name)}/${action}?scope=${scope}`);
-        showToast(`${name}: ${action} successful`, 'success');
+        showToast(`${actionDone[action] || action} ${name}`, 'success');
 
         // Wait briefly for launchd/systemd to update status before refreshing
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -149,9 +156,14 @@ async function performAction(action) {
         }
     } catch (err) {
         console.error(`Action ${action} failed:`, err);
-        showToast(`${action} failed: ${err.message}`, 'error');
+        showToast(`Couldn't ${action} ${name}: ${err.message}`, 'error');
     } finally {
+        // Re-enable controls, then re-apply per-button state so buttons that
+        // should stay disabled (e.g. Start while running) aren't re-enabled.
         setControlsLoading(false);
+        if (state.selectedService) {
+            updateControlButtons(state.selectedService);
+        }
     }
 }
 
@@ -203,7 +215,7 @@ async function handleCreateService(e) {
 
     try {
         await api('POST', `/api/services?scope=${scope}`, config);
-        showToast(`Service ${name} created successfully`, 'success');
+        showToast(`Created ${name}`, 'success');
         closeCreateModal();
         await fetchServices();
 
@@ -214,7 +226,7 @@ async function handleCreateService(e) {
         }
     } catch (err) {
         console.error('Failed to create service:', err);
-        showToast(`Failed to create service: ${err.message}`, 'error');
+        showToast(`Couldn't create service: ${err.message}`, 'error');
     }
 }
 
@@ -265,7 +277,7 @@ async function handleDeleteService() {
 
     try {
         await api('DELETE', `/api/services/${encodeURIComponent(name)}?scope=${scope}`);
-        showToast(`Service ${name} deleted successfully`, 'success');
+        showToast(`Deleted ${name}`, 'success');
         closeDeleteModal();
 
         // Clear selection and refresh
@@ -282,7 +294,7 @@ async function handleDeleteService() {
         await fetchServices();
     } catch (err) {
         console.error('Failed to delete service:', err);
-        showToast(`Failed to delete service: ${err.message}`, 'error');
+        showToast(`Couldn't delete service: ${err.message}`, 'error');
     }
 }
 
@@ -297,9 +309,9 @@ function connectLogStream(serviceName, scope) {
         state.logSocket = null;
     }
 
-    elements.logContent.innerHTML = '<div class="log-placeholder">Connecting to log stream...</div>';
+    elements.logContent.innerHTML = '<div class="log-placeholder">Connecting to logs&hellip;</div>';
     elements.logStatus.classList.remove('connected');
-    elements.logStatus.innerHTML = '<span class="log-dot"></span>CONNECTING';
+    elements.logStatus.innerHTML = '<span class="log-dot"></span>Connecting';
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/api/services/${encodeURIComponent(serviceName)}/logs?scope=${scope}`;
@@ -309,7 +321,7 @@ function connectLogStream(serviceName, scope) {
 
     ws.onopen = () => {
         elements.logStatus.classList.add('connected');
-        elements.logStatus.innerHTML = '<span class="log-dot"></span>STREAMING';
+        elements.logStatus.innerHTML = '<span class="log-dot"></span>Live';
         elements.logContent.innerHTML = '';
     };
 
@@ -320,12 +332,12 @@ function connectLogStream(serviceName, scope) {
     ws.onerror = (err) => {
         console.error('WebSocket error:', err);
         elements.logStatus.classList.remove('connected');
-        elements.logStatus.innerHTML = '<span class="log-dot"></span>ERROR';
+        elements.logStatus.innerHTML = '<span class="log-dot"></span>Error';
     };
 
     ws.onclose = () => {
         elements.logStatus.classList.remove('connected');
-        elements.logStatus.innerHTML = '<span class="log-dot"></span>DISCONNECTED';
+        elements.logStatus.innerHTML = '<span class="log-dot"></span>Disconnected';
         state.logSocket = null;
     };
 }
@@ -371,9 +383,7 @@ function filterAndRenderServices() {
 function renderServiceList() {
     if (state.filteredServices.length === 0) {
         elements.serviceList.innerHTML = `
-            <div class="loading-state">
-                <span>NO SERVICES FOUND</span>
-            </div>
+            <div class="list-message">${state.searchQuery ? 'No services match' : 'No services here yet'}</div>
         `;
         elements.serviceCount.textContent = '0';
         return;
@@ -391,11 +401,9 @@ function renderServiceList() {
                 <div class="service-status ${service.status}"></div>
                 <div class="service-info">
                     <div class="service-name">${escapeHtml(service.name)}</div>
-                    <div class="service-scope">${service.scope.toUpperCase()}</div>
+                    <div class="service-scope">${service.scope}</div>
                 </div>
-                <div class="service-enabled ${service.enabled ? 'enabled' : ''}">
-                    ${service.enabled ? 'ON' : 'OFF'}
-                </div>
+                ${service.enabled ? '' : '<div class="service-chip" title="Doesn\'t start automatically">Manual</div>'}
             </div>
         `;
     }).join('');
@@ -428,9 +436,9 @@ function selectService(service) {
 
     // Update detail info
     elements.detailName.textContent = service.name;
-    elements.detailDescription.textContent = service.description || 'No description available';
+    elements.detailDescription.textContent = service.description || 'No description';
     elements.detailStatus.className = `status-indicator ${service.status}`;
-    elements.detailScope.textContent = service.scope.toUpperCase();
+    elements.detailScope.textContent = service.scope;
 
     // Update control button states
     updateControlButtons(service);

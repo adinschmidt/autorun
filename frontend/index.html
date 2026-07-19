@@ -3,61 +3,57 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark">
     <title>autorun</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>▶</text></svg>">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%236f9dff'/%3E%3Cstop offset='1' stop-color='%233b5fd9'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='4' y='4' width='56' height='56' rx='16' fill='url(%23g)'/%3E%3Cpath d='M26 20l18 12-18 12z' fill='white'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="app">
-        <aside class="sidebar">
+        <aside class="sidebar glass">
             <header class="sidebar-header">
                 <div class="logo">
-                    <span class="logo-icon">▶</span>
+                    <span class="logo-mark" aria-hidden="true">
+                        <svg viewBox="0 0 16 16" width="12" height="12"><path d="M4.5 2.5l9 5.5-9 5.5z" fill="currentColor"/></svg>
+                    </span>
                     <span class="logo-text">autorun</span>
+                    <span class="platform-badge" id="platform-badge">&hellip;</span>
                 </div>
-                <div class="platform-badge" id="platform-badge">detecting...</div>
             </header>
 
             <div class="scope-toggle">
-                <button class="scope-btn active" data-scope="all">ALL</button>
-                <button class="scope-btn" data-scope="system">SYSTEM</button>
-                <button class="scope-btn" data-scope="user">USER</button>
+                <span class="scope-thumb" aria-hidden="true"></span>
+                <button class="scope-btn active" data-scope="all">All</button>
+                <button class="scope-btn" data-scope="system">System</button>
+                <button class="scope-btn" data-scope="user">User</button>
             </div>
 
             <div class="search-container">
-                <input type="text" class="search-input" id="search-input" placeholder="FILTER SERVICES...">
-                <div class="search-line"></div>
-            </div>
-
-            <div class="create-container">
-                <button class="create-btn" id="create-btn">
-                    <span class="btn-icon">+</span>
-                    <span class="btn-text">CREATE SERVICE</span>
-                </button>
+                <svg class="search-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                <input type="text" class="search-input" id="search-input" placeholder="Search services" autocomplete="off" spellcheck="false">
             </div>
 
             <div class="service-list" id="service-list">
                 <div class="loading-state">
                     <div class="spinner"></div>
-                    <span>SCANNING SERVICES...</span>
+                    <span>Loading services&hellip;</span>
                 </div>
             </div>
 
             <footer class="sidebar-footer">
-                <div class="service-count">
-                    <span id="service-count">0</span> SERVICES
-                </div>
+                <div class="service-count"><span id="service-count">0</span> services</div>
+                <button class="create-btn" id="create-btn">
+                    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+                    New service
+                </button>
             </footer>
         </aside>
 
-        <main class="main-panel">
+        <main class="main-panel glass">
             <div class="empty-state" id="empty-state">
-                <div class="empty-icon">◉</div>
-                <div class="empty-text">SELECT A SERVICE</div>
-                <div class="empty-subtext">Choose from the list to view details and logs</div>
+                <div class="empty-lens" aria-hidden="true"></div>
+                <div class="empty-text">Select a service</div>
+                <div class="empty-subtext">Details and live logs appear here</div>
             </div>
 
             <div class="service-detail" id="service-detail" style="display: none;">
@@ -65,71 +61,61 @@
                     <div class="detail-title-row">
                         <div class="status-indicator" id="detail-status"></div>
                         <h1 class="detail-name" id="detail-name">service-name</h1>
-                        <span class="detail-scope" id="detail-scope">USER</span>
+                        <span class="detail-scope" id="detail-scope">user</span>
                     </div>
                     <p class="detail-description" id="detail-description"></p>
                 </header>
 
                 <div class="control-panel">
                     <div class="control-group">
-                        <span class="control-label">RUNTIME</span>
-                        <div class="control-buttons">
-                            <button class="ctrl-btn start" data-action="start" title="Start">
-                                <span class="btn-icon">▶</span>
-                                <span class="btn-text">START</span>
+                        <span class="control-label">Run</span>
+                        <div class="btn-cluster">
+                            <button class="ctrl-btn" data-action="start" title="Start">
+                                <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M4.5 2.5l9 5.5-9 5.5z" fill="currentColor"/></svg>
+                                Start
                             </button>
-                            <button class="ctrl-btn stop" data-action="stop" title="Stop">
-                                <span class="btn-icon">■</span>
-                                <span class="btn-text">STOP</span>
+                            <button class="ctrl-btn" data-action="stop" title="Stop">
+                                <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5" fill="currentColor"/></svg>
+                                Stop
                             </button>
-                            <button class="ctrl-btn restart" data-action="restart" title="Restart">
-                                <span class="btn-icon">↻</span>
-                                <span class="btn-text">RESTART</span>
+                            <button class="ctrl-btn" data-action="restart" title="Restart">
+                                <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.5-3.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M13 1.5V5h-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                Restart
                             </button>
                         </div>
                     </div>
-                    <div class="control-divider"></div>
                     <div class="control-group">
-                        <span class="control-label">BOOT</span>
-                        <div class="control-buttons">
-                            <button class="ctrl-btn enable" data-action="enable" title="Enable">
-                                <span class="btn-icon">◉</span>
-                                <span class="btn-text">ENABLE</span>
+                        <span class="control-label">Startup</span>
+                        <div class="btn-cluster">
+                            <button class="ctrl-btn" data-action="enable" title="Start automatically at boot or login">
+                                <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M8 1.5v6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M11.5 3.6a5.5 5.5 0 1 1-7 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+                                Enable
                             </button>
-                            <button class="ctrl-btn disable" data-action="disable" title="Disable">
-                                <span class="btn-icon">○</span>
-                                <span class="btn-text">DISABLE</span>
-                            </button>
-                        </div>
-                    </div>
-                    <div class="control-divider"></div>
-                    <div class="control-group">
-                        <span class="control-label">MANAGE</span>
-                        <div class="control-buttons">
-                            <button class="ctrl-btn delete" id="delete-btn" title="Delete Service">
-                                <span class="btn-icon">✕</span>
-                                <span class="btn-text">DELETE</span>
+                            <button class="ctrl-btn" data-action="disable" title="Don't start automatically">
+                                <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><circle cx="8" cy="8" r="5.75" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M4.5 8h7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+                                Disable
                             </button>
                         </div>
                     </div>
+                    <div class="control-spacer"></div>
+                    <button class="ctrl-btn danger" id="delete-btn" title="Delete service">
+                        <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M2.5 4h11M6.5 2h3M5 4l.6 9a1 1 0 0 0 1 .9h2.8a1 1 0 0 0 1-.9L11 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        Delete
+                    </button>
                 </div>
 
                 <div class="log-panel">
                     <header class="log-header">
-                        <div class="log-title">
-                            <span class="log-icon">▣</span>
-                            LIVE LOG STREAM
-                        </div>
+                        <div class="log-title">Logs</div>
                         <div class="log-status" id="log-status">
                             <span class="log-dot"></span>
-                            DISCONNECTED
+                            Disconnected
                         </div>
                     </header>
                     <div class="log-viewer" id="log-viewer">
                         <div class="log-content" id="log-content">
-                            <div class="log-placeholder">Connecting to log stream...</div>
+                            <div class="log-placeholder">Connecting to logs&hellip;</div>
                         </div>
-                        <div class="scanlines"></div>
                     </div>
                 </div>
             </div>
@@ -140,54 +126,56 @@
 
     <!-- Create Service Modal -->
     <div class="modal-overlay" id="create-modal" style="display: none;">
-        <div class="modal">
+        <div class="modal glass">
             <header class="modal-header">
-                <h2>CREATE SERVICE</h2>
-                <button class="modal-close" id="create-modal-close">✕</button>
+                <h2>New service</h2>
+                <button class="modal-close" id="create-modal-close" aria-label="Close">
+                    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+                </button>
             </header>
             <form id="create-form" class="modal-form">
                 <div class="form-row">
-                    <div class="form-group">
-                        <label>SERVICE NAME *</label>
-                        <input type="text" id="create-name" required placeholder="com.example.myservice">
+                    <div class="form-group grow">
+                        <label for="create-name">Name</label>
+                        <input type="text" id="create-name" required placeholder="com.example.myservice" autocomplete="off" spellcheck="false">
                     </div>
                     <div class="form-group">
-                        <label>SCOPE</label>
+                        <label for="create-scope">Scope</label>
                         <select id="create-scope">
-                            <option value="user">USER</option>
-                            <option value="system">SYSTEM</option>
+                            <option value="user">User</option>
+                            <option value="system">System</option>
                         </select>
                     </div>
                 </div>
                 <div class="form-group">
-                    <label>PROGRAM PATH *</label>
-                    <input type="text" id="create-program" required placeholder="/usr/bin/myprogram">
+                    <label for="create-program">Program</label>
+                    <input type="text" id="create-program" required placeholder="/usr/local/bin/myprogram" autocomplete="off" spellcheck="false">
                 </div>
                 <div class="form-group">
-                    <label>ARGUMENTS</label>
-                    <input type="text" id="create-arguments" placeholder="--flag value (space-separated)">
+                    <label for="create-arguments">Arguments</label>
+                    <input type="text" id="create-arguments" placeholder="--flag value (space-separated)" autocomplete="off" spellcheck="false">
                 </div>
                 <div class="form-group">
-                    <label>DESCRIPTION</label>
-                    <input type="text" id="create-description" placeholder="My service description">
+                    <label for="create-description">Description</label>
+                    <input type="text" id="create-description" placeholder="What this service does" autocomplete="off">
                 </div>
                 <div class="form-group">
-                    <label>WORKING DIRECTORY</label>
-                    <input type="text" id="create-workdir" placeholder="/path/to/workdir">
+                    <label for="create-workdir">Working directory</label>
+                    <input type="text" id="create-workdir" placeholder="/path/to/workdir" autocomplete="off" spellcheck="false">
                 </div>
-                <div class="form-row">
+                <div class="form-row checkboxes">
                     <div class="form-group checkbox-group">
                         <input type="checkbox" id="create-runatload" checked>
-                        <label for="create-runatload">Run at load</label>
+                        <label for="create-runatload">Start immediately</label>
                     </div>
                     <div class="form-group checkbox-group">
                         <input type="checkbox" id="create-keepalive">
-                        <label for="create-keepalive">Keep alive (auto-restart)</label>
+                        <label for="create-keepalive">Restart if it stops</label>
                     </div>
                 </div>
                 <div class="form-actions">
-                    <button type="button" class="modal-btn cancel" id="create-cancel">CANCEL</button>
-                    <button type="submit" class="modal-btn submit">CREATE</button>
+                    <button type="button" class="modal-btn cancel" id="create-cancel">Cancel</button>
+                    <button type="submit" class="modal-btn submit">Create service</button>
                 </div>
             </form>
         </div>
@@ -195,17 +183,17 @@
 
     <!-- Delete Confirmation Modal -->
     <div class="modal-overlay" id="delete-modal" style="display: none;">
-        <div class="modal modal-small">
+        <div class="modal modal-small glass">
             <header class="modal-header">
-                <h2>DELETE SERVICE</h2>
+                <h2>Delete service</h2>
             </header>
             <div class="modal-body">
-                <p>Are you sure you want to delete <strong id="delete-service-name"></strong>?</p>
-                <p class="warning-text">This action cannot be undone.</p>
+                <p>Delete <strong id="delete-service-name"></strong>?</p>
+                <p class="warning-text">Its service file is removed permanently.</p>
             </div>
             <div class="form-actions">
-                <button type="button" class="modal-btn cancel" id="delete-cancel">CANCEL</button>
-                <button type="button" class="modal-btn delete" id="delete-confirm">DELETE</button>
+                <button type="button" class="modal-btn cancel" id="delete-cancel">Cancel</button>
+                <button type="button" class="modal-btn delete" id="delete-confirm">Delete</button>
             </div>
         </div>
     </div>

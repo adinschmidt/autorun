@@ -6,7 +6,9 @@ import (
 	"strings"
 )
 
-var log *slog.Logger
+// log defaults to a working logger so package functions are safe to call
+// even if Init was never run (e.g. in tests).
+var log = slog.Default()
 
 // Init initializes the global logger with the appropriate level.
 // If verbose is true or LOG_LEVEL env var is "debug", debug logging is enabled.

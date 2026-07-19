@@ -39,8 +39,18 @@ func (r *Router) setupRoutes() {
 	// Frontend static files
 	if r.frontendFS != nil {
 		fileServer := http.FileServer(http.FS(r.frontendFS))
-		r.mux.Handle("/", fileServer)
+		r.mux.Handle("/", noCacheHandler(fileServer))
 	}
+}
+
+// noCacheHandler forces browsers to revalidate embedded assets on every load.
+// Embedded files have no modtime, so without this a browser can keep serving
+// a stale stylesheet or script after the binary is rebuilt.
+func noCacheHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		next.ServeHTTP(w, req)
+	})
 }
 
 // handleServices handles GET /api/services and POST /api/services (create)
